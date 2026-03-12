@@ -1,0 +1,216 @@
+[
+  {
+    "name": "image",
+    "dartWidget": "Image.network",
+    "category": "display",
+    "props": [
+      {
+        "name": "src",
+        "dartParam": "",
+        "type": "string",
+        "optional": false,
+        "defaultValue": "https://via.placeholder.com/150"
+      },
+      {
+        "name": "width",
+        "dartParam": "width",
+        "type": "number",
+        "optional": true
+      },
+      {
+        "name": "height",
+        "dartParam": "height",
+        "type": "number",
+        "optional": true
+      },
+      {
+        "name": "fit",
+        "dartParam": "fit",
+        "type": "string",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "icon",
+    "dartWidget": "Icon",
+    "category": "display",
+    "props": [
+      {
+        "name": "name",
+        "dartParam": "",
+        "type": "icon",
+        "optional": false,
+        "defaultValue": "star"
+      },
+      {
+        "name": "size",
+        "dartParam": "size",
+        "type": "number",
+        "optional": true
+      },
+      {
+        "name": "color",
+        "dartParam": "color",
+        "type": "color",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "divider",
+    "dartWidget": "Divider",
+    "category": "display",
+    "props": [
+      {
+        "name": "height",
+        "dartParam": "height",
+        "type": "number",
+        "optional": true
+      },
+      {
+        "name": "thickness",
+        "dartParam": "thickness",
+        "type": "number",
+        "optional": true
+      },
+      {
+        "name": "color",
+        "dartParam": "color",
+        "type": "color",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "circularProgressIndicator",
+    "dartWidget": "CircularProgressIndicator",
+    "category": "display",
+    "props": [
+      {
+        "name": "color",
+        "dartParam": "color",
+        "type": "color",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "linearProgressIndicator",
+    "dartWidget": "LinearProgressIndicator",
+    "category": "display",
+    "props": [
+      {
+        "name": "value",
+        "dartParam": "value",
+        "type": "number",
+        "optional": true
+      },
+      {
+        "name": "color",
+        "dartParam": "color",
+        "type": "color",
+        "optional": true
+      },
+      {
+        "name": "backgroundColor",
+        "dartParam": "backgroundColor",
+        "type": "color",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "spacer",
+    "dartWidget": "Spacer",
+    "category": "layout",
+    "props": [
+      {
+        "name": "flex",
+        "dartParam": "flex",
+        "type": "number",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "slider",
+    "dartWidget": "Slider",
+    "category": "input",
+    "props": [
+      {
+        "name": "min",
+        "dartParam": "min",
+        "type": "number",
+        "optional": true,
+        "defaultValue": 0
+      },
+      {
+        "name": "max",
+        "dartParam": "max",
+        "type": "number",
+        "optional": true,
+        "defaultValue": 1
+      },
+      {
+        "name": "divisions",
+        "dartParam": "divisions",
+        "type": "number",
+        "optional": true
+      },
+      {
+        "name": "activeColor",
+        "dartParam": "activeColor",
+        "type": "color",
+        "optional": true
+      },
+      {
+        "name": "inactiveColor",
+        "dartParam": "inactiveColor",
+        "type": "color",
+        "optional": true
+      }
+    ],
+    "stateBinding": {
+      "valueProp": "value",
+      "onChangedProp": "onChanged",
+      "stateType": "double"
+    }
+  },
+  {
+    "name": "datePicker",
+    "dartWidget": "DatePicker",
+    "category": "input",
+    "props": [
+      {
+        "name": "initialDate",
+        "dartParam": "initialDate",
+        "type": "string",
+        "optional": false
+      },
+      {
+        "name": "firstDate",
+        "dartParam": "firstDate",
+        "type": "string",
+        "optional": false
+      },
+      {
+        "name": "lastDate",
+        "dartParam": "lastDate",
+        "type": "string",
+        "optional": false
+      },
+      {
+        "name": "selectableDayPredicate",
+        "dartParam": "selectableDayPredicate",
+        "type": "string",
+        "optional": true
+      }
+    ],
+    "stateBinding": {
+      "valueProp": "selectedDate",
+      "onChangedProp": "onDateChanged",
+      "stateType": "DateTime"
+    }
+  }
+]
