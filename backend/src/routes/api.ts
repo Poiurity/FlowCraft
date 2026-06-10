@@ -1,20 +1,33 @@
 import { Router, Request, Response } from 'express';
 import { Orchestrator } from '../services/agents/orchestrator';
+import { ClosedLoopOrchestrator } from '../services/agents/closed-loop-orchestrator';
 import { AppStateManager } from '../services/appstate-manager';
 import { CodeGenerator } from '../services/code-generator';
+import { StaticValidator } from '../services/verification/static-validator';
 import { diffAppState } from '../services/appstate-differ';
 import { explainChanges } from '../services/change-explainer';
 import { AppStateSchema } from '../models/appstate';
 import { randomUUID } from 'crypto';
+import { getVerifyMode, runShadow, shadowStats } from '../services/verification/shadow-verifier';
+import { widgetRegistry } from '../services/widget-registry/registry-manager';
 
 const router = Router();
 const stateManager = new AppStateManager();
 const codeGenerator = new CodeGenerator();
+const importValidator = new StaticValidator();
 
-function getOrchestrator(): Orchestrator {
+function getApiKey(): string {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('OPENAI_API_KEY가 설정되지 않았습니다');
-  return new Orchestrator(apiKey);
+  return apiKey;
+}
+
+function getOrchestrator(): Orchestrator {
+  return new Orchestrator(getApiKey());
+}
+
+function getClosedLoopOrchestrator(): ClosedLoopOrchestrator {
+  return new ClosedLoopOrchestrator(getApiKey());
 }
 
 /**
@@ -23,6 +36,7 @@ function getOrchestrator(): Orchestrator {
  * Returns the generated AppState and Flutter code.
  */
 router.post('/generate', async (req: Request, res: Response) => {
+  const requestId = randomUUID();
   try {
     const { prompt, sessionId: incomingSessionId } = req.body;
 
@@ -33,9 +47,42 @@ router.post('/generate', async (req: Request, res: Response) => {
 
     const sessionId = incomingSessionId || randomUUID();
     const currentState = stateManager.getState(sessionId);
+    const mode = getVerifyMode();
 
+    // Phase 3: enforce mode uses closed-loop orchestrator.
+    if (mode === 'enforce') {
+      const loopOrch = getClosedLoopOrchestrator();
+      const result = await loopOrch.run(prompt, currentState ?? undefined);
+
+      const changeReport = diffAppState(currentState, result.appState);
+      const changelog = explainChanges(changeReport, result.appState.appName);
+
+      // §4.3: degrade-prior means the prior state is already stored — do not overwrite.
+      if (result.outcome !== 'degrade-prior') {
+        stateManager.setState(sessionId, result.appState);
+      }
+
+      res.json({
+        sessionId,
+        appState: result.appState,
+        code: result.code,
+        changelog,
+        degraded: result.degraded,
+        degradeReason: result.degradeReason,
+        attempts: result.attempts.map(a => ({
+          attempt: a.attempt,
+          source: a.source,
+          ok: a.verify.ok,
+          errorCodes: a.verify.errorCodes,
+          durationMs: a.verify.durationMs,
+        })),
+      });
+      return;
+    }
+
+    // shadow / off — use original orchestrator.
     const orchestrator = getOrchestrator();
-    const { appState: newState, intent } = await orchestrator.process(prompt, currentState);
+    const { appState: newState } = await orchestrator.process(prompt, currentState);
 
     const changeReport = diffAppState(currentState, newState);
     const changelog = explainChanges(changeReport, newState.appName);
@@ -49,6 +96,11 @@ router.post('/generate', async (req: Request, res: Response) => {
       code,
       changelog,
     });
+
+    // Phase 2 shadow mode — fire-and-forget after response is sent.
+    if (mode === 'shadow') {
+      runShadow(newState, code, 'live', sessionId, requestId);
+    }
   } catch (err: any) {
     console.error('Generate error:', err);
     res.status(500).json({ error: err.message || '서버 내부 오류가 발생했습니다' });
@@ -74,20 +126,68 @@ router.get('/state/:sessionId', (req: Request, res: Response) => {
 /**
  * POST /api/state
  * Directly set an AppState (for manual editing / import).
+ *
+ * Phase 3 — 3-channel response:
+ *   400  Zod schema parse failure (malformed JSON shape)
+ *   422  StaticValidator returned ok=false (VERIFY_MODE=enforce only)
+ *   500  Verifier threw (infrastructure error) or unexpected server error
  */
-router.post('/state', (req: Request, res: Response) => {
+router.post('/state', async (req: Request, res: Response) => {
+  const requestId = randomUUID();
+  const mode = getVerifyMode();
   try {
     const { sessionId: incomingSessionId, appState } = req.body;
     const sessionId = incomingSessionId || randomUUID();
 
-    const validated = AppStateSchema.parse(appState);
-    stateManager.setState(sessionId, validated);
+    // 400: schema parse failure
+    let validated: ReturnType<typeof AppStateSchema.parse>;
+    try {
+      validated = AppStateSchema.parse(appState);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '유효하지 않은 AppState 스키마입니다' });
+      return;
+    }
+
     const code = codeGenerator.generate(validated);
 
+    // 422 / 500: static validation in enforce mode
+    if (mode === 'enforce') {
+      let verifyResult;
+      try {
+        const snap = widgetRegistry.cloneDefinitions();
+        verifyResult = await importValidator.verify(validated, code, {
+          registryVersion: snap.registryVersion,
+          registrySnapshot: snap,
+          source: 'import',
+          requestId,
+          attempt: 0,
+        });
+      } catch (err: any) {
+        console.error('[POST /api/state] verifier threw:', err);
+        res.status(500).json({ error: 'Verification infrastructure error', detail: err.message });
+        return;
+      }
+
+      if (!verifyResult.ok) {
+        res.status(422).json({
+          error: 'AppState validation failed',
+          errors: verifyResult.errors,
+          warnings: verifyResult.warnings,
+        });
+        return;
+      }
+    }
+
+    stateManager.setState(sessionId, validated);
     res.json({ sessionId, appState: validated, code });
+
+    // Phase 2 shadow mode — fire-and-forget (enforce mode skips shadow, already verified above).
+    if (mode === 'shadow') {
+      runShadow(validated, code, 'import', sessionId, requestId);
+    }
   } catch (err: any) {
     console.error('State set error:', err);
-    res.status(400).json({ error: err.message || '유효하지 않은 AppState입니다' });
+    res.status(500).json({ error: err.message || '서버 내부 오류가 발생했습니다' });
   }
 });
 
@@ -98,6 +198,18 @@ router.delete('/state/:sessionId', (req: Request, res: Response) => {
   const sessionId = req.params.sessionId as string;
   const deleted = stateManager.deleteSession(sessionId);
   res.json({ deleted });
+});
+
+/**
+ * GET /api/shadow-stats
+ * Returns accumulated shadow-mode verification histograms (debug / monitoring).
+ * Only useful when VERIFY_MODE=shadow.
+ */
+router.get('/shadow-stats', (_req: Request, res: Response) => {
+  res.json({
+    mode: getVerifyMode(),
+    stats: shadowStats.toJSON(),
+  });
 });
 
 export default router;
