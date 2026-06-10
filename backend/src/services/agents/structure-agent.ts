@@ -1,6 +1,7 @@
-import { BaseAgent } from './base-agent';
-import type { AppState, Screen, Navigation } from '../../models/appstate';
-import { widgetRegistry } from '../widget-registry/registry-manager';
+import { BaseAgent } from './base-agent.js';
+import type { AppState, Screen, Navigation } from '../../models/appstate.js';
+import { widgetRegistry } from '../widget-registry/registry-manager.js';
+import { StructureEmptyError } from './errors.js';
 
 export interface StructureResult {
   appName: string;
@@ -280,6 +281,10 @@ export class StructureAgent extends BaseAgent {
     if (result.screens.length > 1) {
       console.log(`[StructureAgent] MVP: trimming ${result.screens.length} screens → 1`);
       result.screens = result.screens.slice(0, 1);
+    }
+    // §9.1 guard: covers both missing-array and empty-array shapes (§C.1).
+    if (!Array.isArray(result.screens) || result.screens.length === 0) {
+      throw new StructureEmptyError('Structure agent produced no screens after sanitization');
     }
     result.screens[0].route = '/';
     result.navigation = { type: 'stack' as const, initialRoute: '/' };

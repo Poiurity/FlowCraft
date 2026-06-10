@@ -1,7 +1,9 @@
-import type { AppState, Screen, StateVariable, ScreenState } from '../models/appstate';
-import type { WidgetNode } from '../models/appstate';
-import { widgetRegistry } from './widget-registry/registry-manager';
-import type { WidgetDefinition } from './widget-registry/types';
+import type { AppState, Screen, StateVariable, ScreenState } from '../models/appstate.js';
+import type { WidgetNode } from '../models/appstate.js';
+import { widgetRegistry } from './widget-registry/registry-manager.js';
+import type { WidgetDefinition } from './widget-registry/types.js';
+import type { RegistrySnapshot } from './verification/types.js';
+import { resolveColor, namedColor as namedColorShared } from './codegen-shared/color-table.js';
 
 /**
  * Deterministic Flutter code generator.
@@ -10,8 +12,11 @@ import type { WidgetDefinition } from './widget-registry/types';
  */
 export class CodeGenerator {
   private currentScreenVars: StateVariable[] = [];
+  // Optional registry snapshot — additive param so all current callers are unaffected.
+  private registry: RegistrySnapshot | null = null;
 
-  generate(state: AppState): string {
+  generate(state: AppState, registry?: RegistrySnapshot): string {
+    this.registry = registry ?? null;
     const lines: string[] = [];
 
     lines.push("import 'package:flutter/material.dart';");
@@ -467,7 +472,9 @@ export class CodeGenerator {
       case 'listTile': return this.wListTile(node, state, indent);
       case 'switch': return this.wSwitch(node, indent);
       default: {
-        const def = widgetRegistry.getDefinition(node.type);
+        const def = this.registry
+          ? this.registry.getDefinition(node.type)
+          : widgetRegistry.getDefinition(node.type);
         if (def) return this.renderFromDefinition(def, node, indent);
         return `${pad}const SizedBox.shrink()`;
       }
@@ -1022,39 +1029,11 @@ export class CodeGenerator {
   // ── Helpers ──
 
   private color(hex: string): string {
-    if (!hex) return 'Colors.blue';
-    const named = this.namedColor(hex);
-    if (named) return named;
-    const clean = hex.replace('#', '');
-    if (/^[0-9a-fA-F]{6}$/.test(clean)) return `Color(0xFF${clean.toUpperCase()})`;
-    if (/^[0-9a-fA-F]{8}$/.test(clean)) return `Color(0x${clean.toUpperCase()})`;
-    return 'Colors.blue';
+    return resolveColor(hex);
   }
 
   private namedColor(name: string): string | null {
-    const m: Record<string, string> = {
-      red: 'Colors.red', blue: 'Colors.blue', green: 'Colors.green',
-      yellow: 'Colors.yellow', orange: 'Colors.orange', purple: 'Colors.purple',
-      pink: 'Colors.pink', teal: 'Colors.teal', cyan: 'Colors.cyan',
-      amber: 'Colors.amber', indigo: 'Colors.indigo', lime: 'Colors.lime',
-      brown: 'Colors.brown', grey: 'Colors.grey', gray: 'Colors.grey',
-      white: 'Colors.white', black: 'Colors.black', transparent: 'Colors.transparent',
-      deeporange: 'Colors.deepOrange', deeppurple: 'Colors.deepPurple',
-      lightblue: 'Colors.lightBlue', lightgreen: 'Colors.lightGreen',
-      bluegrey: 'Colors.blueGrey', blueGrey: 'Colors.blueGrey',
-      deepOrange: 'Colors.deepOrange', deepPurple: 'Colors.deepPurple',
-      lightBlue: 'Colors.lightBlue', lightGreen: 'Colors.lightGreen',
-      lavender: 'Color(0xFFE6E6FA)', beige: 'Color(0xFFF5F5DC)',
-      coral: 'Color(0xFFFF7F50)', salmon: 'Color(0xFFFA8072)',
-      mint: 'Color(0xFF98FF98)', ivory: 'Color(0xFFFFFFF0)',
-      navy: 'Color(0xFF000080)', maroon: 'Color(0xFF800000)',
-      olive: 'Color(0xFF808000)', turquoise: 'Color(0xFF40E0D0)',
-      gold: 'Color(0xFFFFD700)', silver: 'Color(0xFFC0C0C0)',
-      crimson: 'Color(0xFFDC143C)', violet: 'Color(0xFFEE82EE)',
-      peach: 'Color(0xFFFFDAB9)', khaki: 'Color(0xFFF0E68C)',
-      plum: 'Color(0xFFDDA0DD)', tan: 'Color(0xFFD2B48C)',
-    };
-    return m[name.toLowerCase()] || null;
+    return namedColorShared(name);
   }
 
   private icon(name: string): string {

@@ -79,7 +79,7 @@ export class WidgetExtenderAgent extends BaseAgent {
       console.log(`[WidgetExtender] Generating definition for: ${widgetName}`);
       try {
         const definition = await this.generateDefinition(widgetName);
-        widgetRegistry.addDefinition(definition);
+        widgetRegistry.stageDefinition(definition);
         added.push(widgetName);
       } catch (err: any) {
         console.error(`[WidgetExtender] Failed to generate ${widgetName}:`, err.message);

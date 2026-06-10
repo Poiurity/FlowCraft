@@ -176,41 +176,5 @@
       "onChangedProp": "onChanged",
       "stateType": "double"
     }
-  },
-  {
-    "name": "datePicker",
-    "dartWidget": "DatePicker",
-    "category": "input",
-    "props": [
-      {
-        "name": "initialDate",
-        "dartParam": "initialDate",
-        "type": "string",
-        "optional": false
-      },
-      {
-        "name": "firstDate",
-        "dartParam": "firstDate",
-        "type": "string",
-        "optional": false
-      },
-      {
-        "name": "lastDate",
-        "dartParam": "lastDate",
-        "type": "string",
-        "optional": false
-      },
-      {
-        "name": "selectableDayPredicate",
-        "dartParam": "selectableDayPredicate",
-        "type": "string",
-        "optional": true
-      }
-    ],
-    "stateBinding": {
-      "valueProp": "selectedDate",
-      "onChangedProp": "onDateChanged",
-      "stateType": "DateTime"
-    }
   }
 ]

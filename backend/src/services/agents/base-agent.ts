@@ -1,5 +1,13 @@
 import OpenAI from 'openai';
 
+export interface CallFunctionOpts {
+  model?: string;
+  fallbackModel?: string;
+  maxRetries?: number;
+  temperature?: number;
+  validate?: (out: unknown) => { ok: boolean; reason?: string };
+}
+
 export class BaseAgent {
   protected openai: OpenAI;
 
@@ -40,6 +48,69 @@ export class BaseAgent {
     }
 
     return JSON.parse(toolCall.function.arguments);
+  }
+
+  // §2.8 — retry wrapper with optional validate hook and fallback model.
+  protected async callFunctionWithRetry(
+    systemPrompt: string,
+    userMessage: string,
+    functionName: string,
+    parameters: Record<string, any>,
+    opts: CallFunctionOpts = {},
+  ): Promise<any> {
+    const {
+      model = 'gpt-4o',
+      fallbackModel = 'gpt-4o-mini',
+      maxRetries = 2,
+      temperature = 0.1,
+      validate,
+    } = opts;
+
+    let lastError: Error | null = null;
+    let currentModel = model;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt === maxRetries && currentModel === model && fallbackModel !== model) {
+        currentModel = fallbackModel;
+      }
+      try {
+        const response = await this.openai.chat.completions.create({
+          model: currentModel,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: attempt > 0 && lastError
+              ? `${userMessage}\n\n[Retry ${attempt}/${maxRetries}: previous attempt failed: ${lastError.message}]`
+              : userMessage },
+          ],
+          tools: [{
+            type: 'function',
+            function: { name: functionName, description: `Generate ${functionName}`, parameters },
+          }],
+          tool_choice: { type: 'function', function: { name: functionName } },
+          temperature,
+        });
+
+        const toolCall = response.choices[0]?.message?.tool_calls?.[0];
+        if (!toolCall || toolCall.function.name !== functionName) {
+          lastError = new Error(`AI가 유효한 ${functionName} 응답을 생성하지 못했습니다.`);
+          continue;
+        }
+
+        const out = JSON.parse(toolCall.function.arguments);
+        if (validate) {
+          const { ok, reason } = validate(out);
+          if (!ok) {
+            lastError = new Error(`Validation failed: ${reason ?? 'unknown'}`);
+            continue;
+          }
+        }
+        return out;
+      } catch (e: any) {
+        lastError = e;
+        if (attempt < maxRetries) continue;
+      }
+    }
+    throw lastError ?? new Error(`callFunctionWithRetry failed after ${maxRetries} retries`);
   }
 
   protected sanitizeScreens(raw: any): any {

@@ -1,10 +1,13 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import type { WidgetDefinition } from './types';
+import { createHash } from 'crypto';
+import type { WidgetDefinition } from './types.js';
+import type { RegistrySnapshot } from '../verification/types.js';
 
 const REGISTRY_PATH = join(__dirname, 'registry.json');
 
-const HARDCODED_WIDGETS = new Set([
+// Exported so the Layer-A lockstep test and RegistrySnapshot builder can import it.
+export const HARDCODED_WIDGETS: ReadonlySet<string> = new Set([
   'text', 'button', 'textField', 'checkbox', 'listView', 'listTile', 'switch',
   'column', 'row', 'container', 'padding', 'sizedBox', 'card', 'center', 'expanded',
 ]);
@@ -42,6 +45,49 @@ export class WidgetRegistryManager {
     this.definitions.set(def.name, def);
     this.persist();
     console.log(`[WidgetRegistry] Added widget: ${def.name} (${def.dartWidget})`);
+  }
+
+  // Stage a definition in memory only — no disk write. Use before the learning compile-gate.
+  stageDefinition(def: WidgetDefinition): void {
+    this.ensureLoaded();
+    this.definitions.set(def.name, def);
+  }
+
+  // Commit a staged definition to disk.
+  commitDefinition(name: string): void {
+    this.ensureLoaded();
+    if (this.definitions.has(name)) this.persist();
+  }
+
+  // Returns a frozen, immutable facade suitable for use as a verification context.
+  // The facade is immune to subsequent addDefinition/stageDefinition mutations.
+  cloneDefinitions(): RegistrySnapshot {
+    this.ensureLoaded();
+    const defsClone: Map<string, WidgetDefinition> = new Map(
+      [...this.definitions.entries()].map(([k, v]) => [k, JSON.parse(JSON.stringify(v))])
+    );
+    const hw = HARDCODED_WIDGETS;
+
+    // registryVersion: content hash over definitions only (not hardcoded set).
+    // Invariant: hardcoded changes → KNOWLEDGE_VERSION bump; registry changes → registryVersion bump.
+    const sorted = [...defsClone.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const registryVersion = createHash('sha256')
+      .update(JSON.stringify(sorted))
+      .digest('hex')
+      .slice(0, 12);
+
+    const snapshot: RegistrySnapshot = {
+      values(): IterableIterator<WidgetDefinition> { return defsClone.values(); },
+      hasWidget(type: string): boolean {
+        return hw.has(type) || defsClone.has(type);
+      },
+      getDefinition(type: string): WidgetDefinition | null {
+        return defsClone.get(type) ?? null;
+      },
+      hardcodedWidgets: hw,
+      registryVersion,
+    };
+    return Object.freeze(snapshot);
   }
 
   hasWidget(widgetType: string): boolean {
