@@ -26,6 +26,8 @@ export interface StageView {
   serverDoneLabel?: string;
   /** For segment lanes: the screen name carried by the stage id. */
   segmentName?: string;
+  /** One-line "what this agent reasoned/decided" (gen-time language). */
+  thinking?: string;
   estimated?: boolean;
   rows: ToolCallRow[];
   durationMs?: number;
@@ -55,6 +57,7 @@ export interface PipelineState {
 
 export type PipelineAction =
   | { kind: 'event'; event: PipelineEvent }
+  | { kind: 'toggle'; stageId: string }
   | { kind: 'reset' };
 
 function makeStageView(id: StageId): StageView {
@@ -116,6 +119,7 @@ function applyStageEvent(state: PipelineState, e: StageEvent): PipelineState {
         : baseView.serverDoneLabel,
     estimated: e.estimated,
     rows: e.rows ?? baseView.rows,
+    thinking: e.thinking ?? baseView.thinking,
     durationMs: e.durationMs ?? baseView.durationMs,
     // auto-expand active stages; collapse on done
     expanded: e.status === 'active' ? true : e.status === 'done' ? false : baseView.expanded,
@@ -143,6 +147,16 @@ function applyStageEvent(state: PipelineState, e: StageEvent): PipelineState {
 
 export function pipelineReducer(state: PipelineState, action: PipelineAction): PipelineState {
   if (action.kind === 'reset') return INITIAL_STATE;
+
+  if (action.kind === 'toggle') {
+    const id = action.stageId;
+    const cur = state.stages[id] ?? state.lanes[id];
+    if (!cur) return state;
+    const flipped = { ...cur, expanded: !cur.expanded };
+    return state.stages[id]
+      ? { ...state, stages: { ...state.stages, [id]: flipped } }
+      : { ...state, lanes: { ...state.lanes, [id]: flipped } };
+  }
 
   const { event } = action;
 

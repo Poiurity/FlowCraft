@@ -32,6 +32,7 @@ export interface StageEvent {
   attempt?: number;
   maxAttempts?: number;
   rows?: ToolCallRow[];
+  thinking?: string;   // one-line "what this agent reasoned/decided"
   t: number;
   durationMs?: number;
   estimated?: boolean;

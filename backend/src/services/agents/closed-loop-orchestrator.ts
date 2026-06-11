@@ -28,7 +28,7 @@ import type {
   CriticVerdict,
 } from '../verification/types.js';
 import type { PipelineEvent, StageId } from '../pipeline-events.js';
-import { ORCHESTRATOR_LABELS, type Lang, type OrchestratorLabels } from './pipeline-labels.js';
+import { ORCHESTRATOR_LABELS, type Lang, type OrchestratorLabels, type ActivityDetail } from './pipeline-labels.js';
 import { severityScore } from '../verification/severity.js';
 
 const MAX_REPAIRS = 2;
@@ -127,13 +127,15 @@ export class ClosedLoopOrchestrator {
     });
   }
 
-  private stageDone(stageId: StageId, durationMs: number, doneLabel?: string, lane?: string): void {
+  private stageDone(stageId: StageId, durationMs: number, doneLabel?: string, lane?: string, details?: ActivityDetail): void {
     this.emit({
       type: 'stage',
       stageId,
       ...(lane ? { lane: lane as any } : {}),
       status: 'done',
       ...(doneLabel ? { doneLabel } : {}),
+      ...(details?.rows?.length ? { rows: details.rows } : {}),
+      ...(details?.thinking ? { thinking: details.thinking } : {}),
       t: this.t(),
       durationMs,
     });
@@ -210,7 +212,7 @@ export class ClosedLoopOrchestrator {
     const clarified = await this.clarifier.clarify(prompt, currentState);
     const clarifyDuration = Date.now() - tClarify;
     console.log(`[ClosedLoop] intent=${clarified.intent} widgets=[${clarified.requiredWidgets.join(',')}]`);
-    this.stageDone('clarify', clarifyDuration, `intent: ${clarified.intent}`);
+    this.stageDone('clarify', clarifyDuration, undefined, undefined, this.L.activity.clarify(clarified));
 
     this.stageActive('extend', undefined, this.L.extendActive);
     const tExtend = Date.now();
@@ -218,7 +220,7 @@ export class ClosedLoopOrchestrator {
     const extendDuration = Date.now() - tExtend;
     if (added.length > 0) {
       console.log(`[ClosedLoop] staged widgets: [${added.join(',')}]`);
-      this.stageDone('extend', extendDuration, this.L.extendDone(added.length));
+      this.stageDone('extend', extendDuration, this.L.extendDone(added.length), undefined, this.L.activity.extend(added, clarified.requiredWidgets));
     } else {
       this.stageSkipped('extend');
     }
@@ -253,11 +255,11 @@ export class ClosedLoopOrchestrator {
 
         const [structure, design] = await Promise.all([
           this.structureAgent.generate(enriched).then(r => {
-            this.stageDone('structure', Date.now() - tStructure, this.L.structureDone(r.screens?.length ?? 0), 'structure');
+            this.stageDone('structure', Date.now() - tStructure, this.L.structureDone(r.screens?.length ?? 0), 'structure', this.L.activity.structure(r));
             return r;
           }),
           this.designAgent.generate(clarified.designDirection || enriched).then(r => {
-            this.stageDone('design', Date.now() - tDesign, this.L.designDone, 'design');
+            this.stageDone('design', Date.now() - tDesign, this.L.designDone, 'design', this.L.activity.design(r));
             return r;
           }),
         ]);
@@ -277,7 +279,7 @@ export class ClosedLoopOrchestrator {
         this.stageActive('structure', undefined, this.L.structureFixActive);
         const tStructure = Date.now();
         const structure = await this.structureAgent.modify(enriched, baseState!);
-        this.stageDone('structure', Date.now() - tStructure, this.L.structureFixDone(structure.screens?.length ?? 0));
+        this.stageDone('structure', Date.now() - tStructure, this.L.structureFixDone(structure.screens?.length ?? 0), undefined, this.L.activity.structure(structure));
 
         this.stageActive('merge', undefined, this.L.mergeActive);
         const tMerge = Date.now();
@@ -294,7 +296,7 @@ export class ClosedLoopOrchestrator {
         this.stageActive('design', undefined, this.L.designFixActive);
         const tDesign = Date.now();
         const design = await this.designAgent.modify(clarified.designDirection || enriched, baseState!.theme);
-        this.stageDone('design', Date.now() - tDesign, this.L.designFixDone);
+        this.stageDone('design', Date.now() - tDesign, this.L.designFixDone, undefined, this.L.activity.design(design));
 
         this.stageActive('merge', undefined, this.L.mergeActive);
         const tMerge = Date.now();
@@ -315,11 +317,11 @@ export class ClosedLoopOrchestrator {
 
         const [structure, design] = await Promise.all([
           this.structureAgent.modify(enriched, baseState!).then(r => {
-            this.stageDone('structure', Date.now() - tStructure, this.L.structureScreens(r.screens?.length ?? 0), 'structure');
+            this.stageDone('structure', Date.now() - tStructure, this.L.structureScreens(r.screens?.length ?? 0), 'structure', this.L.activity.structure(r));
             return r;
           }),
           this.designAgent.modify(clarified.designDirection || enriched, baseState!.theme).then(r => {
-            this.stageDone('design', Date.now() - tDesign, this.L.designFixDone, 'design');
+            this.stageDone('design', Date.now() - tDesign, this.L.designFixDone, 'design', this.L.activity.design(r));
             return r;
           }),
         ]);
@@ -410,7 +412,7 @@ export class ClosedLoopOrchestrator {
     this.stageActive('codegen', undefined, this.L.codegenActive);
     const tCodegen = Date.now();
     let code = this.codeGenerator.generate(appState, snap);
-    this.stageDone('codegen', Date.now() - tCodegen, this.L.codegenDone(appState.screens.length));
+    this.stageDone('codegen', Date.now() - tCodegen, this.L.codegenDone(appState.screens.length), undefined, this.L.activity.codegen(appState, code.split('\n').length));
 
     // VERIFY (attempt 0)
     this.stageActive('verify', undefined, this.L.verifyActive);
@@ -569,7 +571,7 @@ export class ClosedLoopOrchestrator {
     try {
       plan = await this.plannerAgent.plan(clarified.enrichedPrompt);
       console.log(`[Phase5] plan: ${plan.segments.length} segments, nav=${plan.navigationStyle}`);
-      this.stageDone('plan', Date.now() - tPlan, this.L.planDone(plan.segments.length));
+      this.stageDone('plan', Date.now() - tPlan, this.L.planDone(plan.segments.length), undefined, this.L.activity.plan(plan));
     } catch (e) {
       console.warn('[Phase5] plan failed, falling back to non-Phase5 run');
       return handleGenerationThrow(e, currentState, this.codeGenerator, prepResult);
@@ -581,7 +583,7 @@ export class ClosedLoopOrchestrator {
     let design: { theme: import('../../models/appstate.js').Theme };
     try {
       design = await this.designAgent.generate(clarified.designDirection || clarified.enrichedPrompt);
-      this.stageDone('design', Date.now() - tDesign, this.L.designDone, 'design');
+      this.stageDone('design', Date.now() - tDesign, this.L.designDone, 'design', this.L.activity.design(design));
     } catch (e) {
       return handleGenerationThrow(e, currentState, this.codeGenerator, prepResult);
     }
@@ -619,7 +621,7 @@ export class ClosedLoopOrchestrator {
     this.stageActive('codegen', undefined, this.L.codegenActive);
     const tCodegen = Date.now();
     let code = this.codeGenerator.generate(appState, snap);
-    this.stageDone('codegen', Date.now() - tCodegen, this.L.codegenDone(appState.screens.length));
+    this.stageDone('codegen', Date.now() - tCodegen, this.L.codegenDone(appState.screens.length), undefined, this.L.activity.codegen(appState, code.split('\n').length));
 
     // VERIFY → REPAIR (same loop as normal run)
     const attempts: AttemptRecord[] = [];

@@ -34,27 +34,8 @@ export function PipelineSpine({ dispatch, onSkip }: Props) {
   }, [state.stages, state.lanes]);
 
   const toggleStage = useCallback((id: string) => {
-    const stage = state.stages[id] ?? state.lanes[id];
-    if (!stage) return;
-    const isLane = PARALLEL_LANE_STAGES.has(id as any) || id.startsWith('segment:');
-    if (isLane) {
-      dispatch({
-        kind: 'event',
-        event: {
-          type: 'stage',
-          stageId: id as any,
-          lane: id as any,
-          status: stage.status,
-          t: 0,
-          rows: stage.rows,
-        },
-      });
-    }
-    // Toggle handled via StageCard expanded prop — we'd need a local toggle map
-    // Simple approach: dispatch a noop and track expansion locally with PipelineContext
-    // For now, the reducer auto-manages expansion; user clicks don't re-toggle here.
-    // A future enhancement can add a 'toggle' action.
-  }, [state, dispatch]);
+    dispatch({ kind: 'toggle', stageId: id });
+  }, [dispatch]);
 
   if (state.status === 'idle') {
     return (

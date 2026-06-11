@@ -498,6 +498,15 @@ body {
 }
 .stage-node__timing--estimated { color: rgba(255,255,255,0.2); font-style: italic; }
 
+/* Per-agent "thinking" line — what the agent reasoned/decided */
+.stage-node__thinking {
+  margin: 4px 0 0 24px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: rgba(255,255,255,0.5);
+  animation: fade-in 0.25s ease;
+}
+
 .stage-node__chevron { color: rgba(255,255,255,0.3); display: flex; align-items: center; }
 
 /* Stage glyph */

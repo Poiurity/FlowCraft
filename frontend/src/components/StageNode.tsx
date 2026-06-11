@@ -63,6 +63,9 @@ export function StageNode({ stage, onToggle, compact = false }: Props) {
           </span>
         )}
       </div>
+      {stage.thinking && (
+        <div className="stage-node__thinking">{stage.thinking}</div>
+      )}
     </div>
   );
 }
