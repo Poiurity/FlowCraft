@@ -1004,6 +1004,19 @@ function makeFactSheet(appState: AppState): string {
   const actions = appState.screens.flatMap(s => collectScreenActions(s));
   const actionTypes = [...new Set(actions.map((a: any) => a.type))];
 
+  // Per-action binding facts so the critic can detect mis-wiring (e.g. Add
+  // pointed at the wrong list) rather than just feature presence.
+  const bindingFacts = actions
+    .filter((a: any) => !['none', 'navigate', 'pop'].includes(a.type))
+    .map((a: any) => {
+      if (a.type === 'addItem') return `addItem→list '${a.listName}'`;
+      if (a.type === 'removeItem' || a.type === 'toggleItemField') return `${a.type}→list '${a.listName}'${a.fieldName ? `.${a.fieldName}` : ''}`;
+      if (a.type === 'increment' || a.type === 'decrement') return `${a.type}→'${a.fieldName}'`;
+      if (a.type === 'setValue') return `setValue→'${a.fieldName}'`;
+      if (a.type === 'clearField') return `clearField→'${(a.clearFields ?? [a.fieldName]).filter(Boolean).join("','")}'`;
+      return a.type;
+    });
+
   const widgetTypes = new Set<string>();
   function walkWidgets(node: any): void {
     if (!node || typeof node !== 'object') return;
@@ -1022,6 +1035,7 @@ function makeFactSheet(appState: AppState): string {
     `Screens: ${appState.screens.length} (names: ${appState.screens.map(s => s.name).join(', ')})`,
     `State variables: ${vars.length > 0 ? vars.map((v: any) => `${v.name}:${v.type}`).join(', ') : 'none'}`,
     `Action types: ${actionTypes.length > 0 ? actionTypes.join(', ') : 'none'}`,
+    `Action bindings: ${bindingFacts.length > 0 ? bindingFacts.join('; ') : 'none'}`,
     `Widget types: ${[...widgetTypes].join(', ')}`,
     `Navigation: ${appState.navigation.type}`,
   ].join('\n');

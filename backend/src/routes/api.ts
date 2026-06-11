@@ -12,6 +12,7 @@ import { getVerifyMode, runShadow, shadowStats } from '../services/verification/
 import { widgetRegistry } from '../services/widget-registry/registry-manager';
 import type { PipelineEvent } from '../services/pipeline-events';
 import { resolveLang } from '../services/agents/pipeline-labels';
+import { recordLoopResult, getLoopStats } from '../services/verification/loop-telemetry';
 
 const router = Router();
 const stateManager = new AppStateManager();
@@ -55,6 +56,7 @@ router.post('/generate', async (req: Request, res: Response) => {
     if (mode === 'enforce') {
       const loopOrch = getClosedLoopOrchestrator(lang);
       const result = await loopOrch.run(prompt, currentState ?? undefined);
+      recordLoopResult(result);
 
       const changeReport = diffAppState(currentState, result.appState);
       const changelog = explainChanges(changeReport, result.appState.appName);
@@ -161,6 +163,7 @@ router.post('/generate/stream', async (req: Request, res: Response) => {
   try {
     const loopOrch = new ClosedLoopOrchestrator(getApiKey(), write, resolveLang(lang));
     const result = await loopOrch.run(prompt, currentState ?? undefined);
+    recordLoopResult(result);
 
     const changeReport = diffAppState(currentState, result.appState);
     const changelog = explainChanges(changeReport, result.appState.appName);
@@ -320,6 +323,14 @@ router.get('/shadow-stats', (_req: Request, res: Response) => {
     mode: getVerifyMode(),
     stats: shadowStats.toJSON(),
   });
+});
+
+/**
+ * GET /api/loop-stats
+ * Accumulated closed-loop outcome telemetry (degrade/repair/reloop rates).
+ */
+router.get('/loop-stats', (_req: Request, res: Response) => {
+  res.json(getLoopStats());
 });
 
 export default router;
