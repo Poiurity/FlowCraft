@@ -10,7 +10,7 @@ C1       - {{varName}} references a variable not declared in screenState.variabl
 C1-dotted - {{var.field}} — var is not an itemList type; member access is invalid
 C2       - listView.props.dataSource references a variable that doesn't exist or is wrong type (must be stringList or itemList)
 C3       - Action references a state variable that doesn't exist
-C3b      - Handler method was never declared (setValue/clearField produce no handler; appBar actions never collected)
+C3b      - Handler method was never declared (e.g. appBar actions are never collected)
 C4       - item.field access outside a listView's item scope
 C5       - Unknown widget type used (not in registry or hardcoded list)
 C6       - Expanded widget in invalid position (only valid directly inside row or column)
@@ -20,6 +20,8 @@ C9       - Screen name not PascalCase OR uses a Dart reserved identifier
 C10      - State variable name collides with a Dart reserved identifier
 C11      - Registry widget uses a Flutter widget not in the known safe allowlist
 C12      - Duplicate identifier (two screens with same name, variable collision, etc.)
+C15      - Binding/mutation target has the wrong type (e.g. increment on a string var, checkbox bound to an int, clearFields on a non-string) — the generated Dart would be a type error
+C16      - navigate action's target does not match any screen id or route — would crash at runtime ("no route")
 
 PATCH OP TYPES:
 - "set"           — set the node at path to value (creating a missing key is allowed)
@@ -36,12 +38,13 @@ Examples:
 REPAIR RULES:
 - Emit patches ONLY for paths at or under the provided error locations.
 - For C3b (appBar action): move the action onto a body widget or change its type to navigate/pop.
-- For C3b (setValue/clearField): replace type with "none" or a supported action.
 - For C11 (datePicker → DatePicker): emit ALL of these together:
     1. Set node type to "textField".
     2. Replace node props with { "label": "Date", "hint": "YYYY-MM-DD", "boundTo": "<that var>" }.
     3. Set the bound state variable's type to "string" (or create it).
 - For C1-dotted: change {{x.y}} binding to a scalar var {{x}} or, inside a listView, {{item.y}}.
+- For C15: change the bound/mutated state variable's type to match the widget (int/double for increment/decrement, bool for checkbox/switch, double for slider, string for clearFields), OR point the action/binding at a correctly-typed variable.
+- For C16: set the navigate target to an existing screen's id or route, or change the action type to "none"/"pop".
 - Prefer "set" over "remove". Never delete an entire screen or body.
 - If ALL errors are genuinely contradictory and unfixable, set unrepairable=true.
 
@@ -85,8 +88,9 @@ function computeEditablePaths(errors: ValidationError[]): string[] {
       if (m) { paths.add(`${m[1]}.body`); paths.add(`${m[1]}.appBar`); }
     }
 
-    // C11 poison widget: open screenState.variables so boundTo var can be retyped
-    if (e.code === 'C11' && np) {
+    // C11 poison widget / C15 type mismatch: open screenState.variables so the
+    // bound/mutated var can be retyped.
+    if ((e.code === 'C11' || e.code === 'C15') && np) {
       const m = np.match(/^(screens\[\d+\])/);
       if (m) paths.add(`${m[1]}.screenState.variables`);
     }

@@ -69,6 +69,7 @@ export const ActionSchema = z.object({
   listName: z.string().optional(),
   fieldName: z.string().optional(),
   valueFrom: z.string().optional(),
+  value: z.any().optional(),          // literal for setValue (coerced to fieldName's type)
   clearFields: z.array(z.string()).optional(),
   itemTemplate: z.record(z.string(), z.any()).optional(),
 });
@@ -217,6 +218,20 @@ export const NavigationSchema = z.object({
   })).optional(),
 });
 
+// ── CustomCode (Phase 5 escape hatch) ──
+
+export const CustomCodeInterfaceSchema = z.object({
+  stateDeps: z.array(z.string()).default([]),
+  imports: z.array(z.string()).default([]),
+  returns: z.literal('Widget').default('Widget'),
+  inputs: z.array(z.enum(['context', 'r'])).default(['context']),
+});
+
+export const CustomCodeSchema = z.object({
+  dart: z.string(),
+  interface: CustomCodeInterfaceSchema,
+});
+
 // ── Root AppState ──
 
 export const AppStateSchema = z.object({
@@ -224,9 +239,12 @@ export const AppStateSchema = z.object({
   theme: ThemeSchema.default({}),
   screens: z.array(ScreenSchema).min(1),
   navigation: NavigationSchema.default({}),
+  requiresRemoteVerify: z.boolean().optional(),
 });
 
 export type AppState = z.infer<typeof AppStateSchema>;
+export type CustomCode = z.infer<typeof CustomCodeSchema>;
+export type CustomCodeInterface = z.infer<typeof CustomCodeInterfaceSchema>;
 export type Screen = z.infer<typeof ScreenSchema>;
 export type ScreenState = z.infer<typeof ScreenStateSchema>;
 export type StateVariable = z.infer<typeof StateVariableSchema>;

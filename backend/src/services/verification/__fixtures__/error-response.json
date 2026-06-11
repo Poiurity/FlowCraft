@@ -1,0 +1,19 @@
+{
+  "issues": [
+    {
+      "kind": "error",
+      "code": "undefined_identifier",
+      "message": "Undefined name 'Foo'",
+      "correction": "Try importing the library that defines 'Foo'.",
+      "line": 42,
+      "column": 5
+    },
+    {
+      "kind": "warning",
+      "code": "unused_local_variable",
+      "message": "The value of '_x' isn't used.",
+      "line": 15,
+      "column": 7
+    }
+  ]
+}

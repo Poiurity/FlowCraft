@@ -10,6 +10,8 @@ import { AppStateSchema } from '../models/appstate';
 import { randomUUID } from 'crypto';
 import { getVerifyMode, runShadow, shadowStats } from '../services/verification/shadow-verifier';
 import { widgetRegistry } from '../services/widget-registry/registry-manager';
+import type { PipelineEvent } from '../services/pipeline-events';
+import { resolveLang } from '../services/agents/pipeline-labels';
 
 const router = Router();
 const stateManager = new AppStateManager();
@@ -26,8 +28,8 @@ function getOrchestrator(): Orchestrator {
   return new Orchestrator(getApiKey());
 }
 
-function getClosedLoopOrchestrator(): ClosedLoopOrchestrator {
-  return new ClosedLoopOrchestrator(getApiKey());
+function getClosedLoopOrchestrator(lang?: unknown): ClosedLoopOrchestrator {
+  return new ClosedLoopOrchestrator(getApiKey(), undefined, resolveLang(lang));
 }
 
 /**
@@ -38,7 +40,7 @@ function getClosedLoopOrchestrator(): ClosedLoopOrchestrator {
 router.post('/generate', async (req: Request, res: Response) => {
   const requestId = randomUUID();
   try {
-    const { prompt, sessionId: incomingSessionId } = req.body;
+    const { prompt, sessionId: incomingSessionId, lang } = req.body;
 
     if (!prompt || typeof prompt !== 'string') {
       res.status(400).json({ error: 'prompt는 필수이며 문자열이어야 합니다' });
@@ -51,7 +53,7 @@ router.post('/generate', async (req: Request, res: Response) => {
 
     // Phase 3: enforce mode uses closed-loop orchestrator.
     if (mode === 'enforce') {
-      const loopOrch = getClosedLoopOrchestrator();
+      const loopOrch = getClosedLoopOrchestrator(lang);
       const result = await loopOrch.run(prompt, currentState ?? undefined);
 
       const changeReport = diffAppState(currentState, result.appState);
@@ -69,12 +71,30 @@ router.post('/generate', async (req: Request, res: Response) => {
         changelog,
         degraded: result.degraded,
         degradeReason: result.degradeReason,
+        fidelity: result.fidelity,
+        finalState: result.finalState,
         attempts: result.attempts.map(a => ({
           attempt: a.attempt,
           source: a.source,
           ok: a.verify.ok,
           errorCodes: a.verify.errorCodes,
           durationMs: a.verify.durationMs,
+          ...(a.critic && {
+            critic: {
+              called: a.critic.called,
+              fidelityScore: a.critic.fidelityScore,
+              recommendation: a.critic.recommendation,
+              reloop: a.critic.reloop,
+              durationMs: a.critic.durationMs,
+            },
+          }),
+          ...(a.repair && {
+            repair: {
+              unrepairable: a.repair.unrepairable,
+              patchesApplied: a.repair.patchesApplied,
+              patchesDropped: a.repair.patchesDropped,
+            },
+          }),
         })),
       });
       return;
@@ -104,6 +124,96 @@ router.post('/generate', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('Generate error:', err);
     res.status(500).json({ error: err.message || '서버 내부 오류가 발생했습니다' });
+  }
+});
+
+/**
+ * POST /api/generate/stream
+ * Server-Sent Events endpoint. Streams PipelineEvent JSON lines as the
+ * ClosedLoopOrchestrator runs, then sends a final `result` event.
+ * Falls back to enforce-mode behavior regardless of VERIFY_MODE
+ * (callers that need non-SSE output use POST /api/generate instead).
+ */
+router.post('/generate/stream', async (req: Request, res: Response) => {
+  const { prompt, sessionId: incomingSessionId, lang } = req.body;
+
+  if (!prompt || typeof prompt !== 'string') {
+    res.status(400).json({ error: 'prompt는 필수이며 문자열이어야 합니다' });
+    return;
+  }
+
+  const sessionId = incomingSessionId || randomUUID();
+  const currentState = stateManager.getState(sessionId);
+
+  // SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const write = (event: PipelineEvent) => {
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    }
+  };
+
+  try {
+    const loopOrch = new ClosedLoopOrchestrator(getApiKey(), write, resolveLang(lang));
+    const result = await loopOrch.run(prompt, currentState ?? undefined);
+
+    const changeReport = diffAppState(currentState, result.appState);
+    const changelog = explainChanges(changeReport, result.appState.appName);
+
+    if (result.outcome !== 'degrade-prior') {
+      stateManager.setState(sessionId, result.appState);
+    }
+
+    // Final result event — frontend uses this to update appState + code
+    const payload = {
+      sessionId,
+      appState: result.appState,
+      code: result.code,
+      changelog,
+      degraded: result.degraded,
+      degradeReason: result.degradeReason,
+      fidelity: result.fidelity,
+      finalState: result.finalState,
+      attempts: result.attempts.map(a => ({
+        attempt: a.attempt,
+        source: a.source,
+        ok: a.verify.ok,
+        errorCodes: a.verify.errorCodes,
+        durationMs: a.verify.durationMs,
+        ...(a.critic && {
+          critic: {
+            called: a.critic.called,
+            fidelityScore: a.critic.fidelityScore,
+            recommendation: a.critic.recommendation,
+            reloop: a.critic.reloop,
+            durationMs: a.critic.durationMs,
+          },
+        }),
+        ...(a.repair && {
+          repair: {
+            unrepairable: a.repair.unrepairable,
+            patchesApplied: a.repair.patchesApplied,
+            patchesDropped: a.repair.patchesDropped,
+          },
+        }),
+      })),
+    };
+
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ type: 'result', payload })}\n\n`);
+    }
+  } catch (err: any) {
+    console.error('Generate stream error:', err);
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: err.message || '서버 내부 오류' })}\n\n`);
+    }
+  } finally {
+    if (!res.writableEnded) res.end();
   }
 });
 

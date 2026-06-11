@@ -4,6 +4,7 @@
 import type { AppState } from '../../models/appstate';
 import type { Verifier, VerifyContext, AnalyzeResult, ValidationError } from './types';
 import { loadRemoteConfig, type RemoteConfig } from './remote-config';
+import { buildCacheKey } from './verification-cache';
 
 interface DartIssue {
   kind: 'error' | 'warning' | 'info';
@@ -36,7 +37,9 @@ export class RemoteAnalyzer implements Verifier {
 
   async verify(appState: AppState, code: string, ctx: VerifyContext): Promise<AnalyzeResult> {
     const t0 = Date.now();
-    const cacheKey = ctx.requestId ?? '';
+    // Key on the content-derived composite key (not the per-run requestId) so the
+    // metadata is stable and aligns with the rest of the verification pipeline.
+    const cacheKey = buildCacheKey(appState, ctx.registryVersion);
 
     if (!this.isAvailable()) {
       return this.degraded(cacheKey, t0);

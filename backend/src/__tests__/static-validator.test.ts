@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { StaticValidator } from '../services/verification/static-validator';
 import { widgetRegistry, HARDCODED_WIDGETS } from '../services/widget-registry/registry-manager';
 import { HARDCODED_NODE_TYPES } from '../services/verification/knowledge/known-widgets';
+import { TEXT_CONTENT_PROP, bindingPropsFor } from '../services/codegen-shared/binding-props';
 import type { VerifyContext, RegistrySnapshot } from '../services/verification/types';
 import type { WidgetDefinition } from '../services/widget-registry/types';
 import type { AppState } from '../models/appstate';
@@ -81,6 +82,15 @@ describe('lockstep', () => {
       'HARDCODED_NODE_TYPES must equal HARDCODED_WIDGETS'
     );
   });
+
+  test('Text binding manifest lists the prop codegen actually renders (content)', () => {
+    // If wText interpolates a prop not in the manifest, the validator goes blind
+    // to it — the exact drift this manifest exists to prevent.
+    assert.ok(
+      bindingPropsFor('text').textBindingProps.includes(TEXT_CONTENT_PROP),
+      `manifest must include '${TEXT_CONTENT_PROP}' (the prop wText renders)`
+    );
+  });
 });
 
 // ── C1 — undeclared state var ref ─────────────────────────────────────────
@@ -104,6 +114,16 @@ describe('C1', () => {
     state.screens[0].body = { type: 'text', props: { text: '{{count}}' } };
     const result = await validator.verify(state, '', makeCtx());
     assert.equal(result.errors.filter(e => e.code === 'C1').length, 0);
+  });
+
+  // Regression: the production binding site is props.content, not props.text.
+  test('fires for undeclared var in Text content prop (the real codegen site)', async () => {
+    const state = validBase();
+    state.screens[0].body = { type: 'text', props: { content: '{{count}}' } };
+    const result = await validator.verify(state, '', makeCtx());
+    const c1 = result.errors.filter(e => e.code === 'C1');
+    assert.equal(c1.length, 1, `expected one C1 for content binding, got ${result.errors.map(e => e.code).join(',')}`);
+    assert.ok(c1[0].message.includes('count'));
   });
 });
 
@@ -146,32 +166,37 @@ describe('C2', () => {
 // ── C3b — setValue / clearField no handler ───────────────────────────────
 
 describe('C3b', () => {
-  test('fires for setValue action (no generateActionHandlers branch)', async () => {
+  // setValue / clearField are now real inline-closure actions — no longer C3b traps.
+  test('setValue with a declared target is clean (no C3b)', async () => {
     const state = validBase();
-    state.screens[0].screenState = { variables: [{ name: 'q', type: 'string', initialValue: '' }] };
+    state.screens[0].screenState = { variables: [{ name: 'status', type: 'string', initialValue: '' }] };
     state.screens[0].body = {
       type: 'button',
-      props: {
-        label: 'Reset',
-        action: { type: 'setValue', fieldName: 'q', valueFrom: '' },
-      },
+      props: { label: 'Set', action: { type: 'setValue', fieldName: 'status', value: 'active' } },
     };
     const result = await validator.verify(state, '', makeCtx());
-    assert.ok(result.errors.some(e => e.code === 'C3b'), 'should flag setValue as C3b');
+    assert.equal(result.errors.filter(e => e.code === 'C3b').length, 0, `unexpected C3b: ${result.errors.map(e => e.code).join(',')}`);
   });
 
-  test('fires for clearField action', async () => {
+  test('setValue with an undeclared target fires C1', async () => {
+    const state = validBase();
+    state.screens[0].body = {
+      type: 'button',
+      props: { label: 'Set', action: { type: 'setValue', fieldName: 'ghost', value: 'x' } },
+    };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C1'), 'undeclared setValue target should be C1');
+  });
+
+  test('clearField with a declared target is clean (no C3b)', async () => {
     const state = validBase();
     state.screens[0].screenState = { variables: [{ name: 'q', type: 'string', initialValue: '' }] };
     state.screens[0].body = {
       type: 'button',
-      props: {
-        label: 'Clear',
-        action: { type: 'clearField', fieldName: 'q' },
-      },
+      props: { label: 'Clear', action: { type: 'clearField', fieldName: 'q' } },
     };
     const result = await validator.verify(state, '', makeCtx());
-    assert.ok(result.errors.some(e => e.code === 'C3b'));
+    assert.equal(result.errors.filter(e => e.code === 'C3b').length, 0);
   });
 
   test('fires for appBar action (collectActions never visits appBar)', async () => {
@@ -183,6 +208,65 @@ describe('C3b', () => {
     };
     const result = await validator.verify(state, '', makeCtx());
     assert.ok(result.errors.some(e => e.code === 'C3b'), 'appBar addItem should be C3b');
+  });
+});
+
+// ── C15 — typed-binding / mutation target type mismatch ──────────────────────
+
+describe('C15', () => {
+  test('fires when increment targets a string var', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'name', type: 'string', initialValue: '' }] };
+    state.screens[0].body = {
+      type: 'button',
+      props: { label: '+', action: { type: 'increment', fieldName: 'name' } },
+    };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C15'), `expected C15, got ${result.errors.map(e => e.code).join(',')}`);
+  });
+
+  test('no C15 when increment targets an int var', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'count', type: 'int', initialValue: 0 }] };
+    state.screens[0].body = {
+      type: 'button',
+      props: { label: '+', action: { type: 'increment', fieldName: 'count' } },
+    };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.equal(result.errors.filter(e => e.code === 'C15').length, 0);
+  });
+
+  test('fires when checkbox is bound to a non-bool var', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'qty', type: 'int', initialValue: 0 }] };
+    state.screens[0].body = { type: 'checkbox', props: { boundTo: 'qty' } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C15'), `expected C15, got ${result.errors.map(e => e.code).join(',')}`);
+  });
+
+  test('no C15 when switch is bound to a bool var', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'on', type: 'bool', initialValue: false }] };
+    state.screens[0].body = { type: 'switch', props: { boundTo: 'on' } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.equal(result.errors.filter(e => e.code === 'C15').length, 0);
+  });
+
+  test('fires when clearFields names a non-string var', async () => {
+    const state = validBase();
+    state.screens[0].screenState = {
+      variables: [
+        { name: 'todos', type: 'stringList', initialValue: [] },
+        { name: 'text', type: 'string', initialValue: '' },
+        { name: 'count', type: 'int', initialValue: 0 },
+      ],
+    };
+    state.screens[0].body = {
+      type: 'button',
+      props: { label: 'Add', action: { type: 'addItem', listName: 'todos', valueFrom: 'text', clearFields: ['text', 'count'] } },
+    };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C15'), `expected C15 for clearFields int, got ${result.errors.map(e => e.code).join(',')}`);
   });
 });
 
@@ -393,21 +477,73 @@ describe('C12', () => {
 // On import path, they survive; the validator should NOT emit C3 for navigate.
 
 describe('C3-navigate', () => {
-  test('navigate action on import path does not fire C3 (import-only path)', async () => {
+  test('navigate to a resolvable route produces no C3/C16', async () => {
     const state = validBase();
+    state.screens.push({
+      id: 'other', name: 'Other', route: '/other',
+      body: { type: 'column', props: {}, children: [] }, screenState: { variables: [] },
+    });
     state.screens[0].body = {
       type: 'button',
-      props: {
-        label: 'Go',
-        action: { type: 'navigate', target: '/other' },
-      },
+      props: { label: 'Go', action: { type: 'navigate', target: '/other' } },
     };
     const result = await validator.verify(state, '', makeCtx('import'));
     assert.equal(
-      result.errors.filter(e => e.code === 'C3' || e.code === 'C3a').length,
-      0,
-      'navigate action must not produce C3 on import path'
+      result.errors.filter(e => ['C3', 'C3a', 'C16'].includes(e.code)).length, 0,
+      'navigate to an existing route must not error',
     );
+  });
+});
+
+// ── C9 (tabs) — tab item screenId integrity ──────────────────────────────────
+
+describe('C9 tabs', () => {
+  test('fires when a tabs item screenId matches no screen', async () => {
+    const state = validBase();
+    state.navigation = {
+      type: 'tabs', initialRoute: '/',
+      bottomNavItems: [{ icon: 'home', label: 'Home', screenId: 'ghost' }],
+    };
+    const result = await validator.verify(state, '', makeCtx('import'));
+    assert.ok(result.errors.some(e => e.code === 'C9'), `expected C9, got ${result.errors.map(e => e.code).join(',')}`);
+  });
+
+  test('no C9 when tabs items resolve to real screens', async () => {
+    const state = validBase();
+    state.navigation = {
+      type: 'tabs', initialRoute: '/',
+      bottomNavItems: [{ icon: 'home', label: 'Home', screenId: 'home' }],
+    };
+    const result = await validator.verify(state, '', makeCtx('import'));
+    assert.equal(result.errors.filter(e => e.code === 'C9').length, 0);
+  });
+});
+
+// ── C16 — navigate target resolution ─────────────────────────────────────────
+
+describe('C16', () => {
+  test('fires when navigate target matches no screen id or route', async () => {
+    const state = validBase();
+    state.screens[0].body = {
+      type: 'button',
+      props: { label: 'Go', action: { type: 'navigate', target: '/ghost' } },
+    };
+    const result = await validator.verify(state, '', makeCtx('import'));
+    assert.ok(result.errors.some(e => e.code === 'C16'), `expected C16, got ${result.errors.map(e => e.code).join(',')}`);
+  });
+
+  test('resolves a bare screenId to its route (no C16)', async () => {
+    const state = validBase();
+    state.screens.push({
+      id: 'detail', name: 'Detail', route: '/detail-page',
+      body: { type: 'column', props: {}, children: [] }, screenState: { variables: [] },
+    });
+    state.screens[0].body = {
+      type: 'button',
+      props: { label: 'Go', action: { type: 'navigate', target: 'detail' } },
+    };
+    const result = await validator.verify(state, '', makeCtx('import'));
+    assert.equal(result.errors.filter(e => e.code === 'C16').length, 0);
   });
 });
 

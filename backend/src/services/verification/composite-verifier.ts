@@ -16,8 +16,11 @@ export class CompositeVerifier implements Verifier {
   async verify(appState: AppState, code: string, ctx: VerifyContext): Promise<AnalyzeResult> {
     const t0 = Date.now();
 
-    // 1. Cache check (§2.6 composite key)
-    const cacheKey = buildCacheKey(appState, ctx.registryVersion);
+    // 1. Cache check (§2.6 composite key). The key is suffixed by whether Layer B
+    // is available NOW, so a static-only (B-skipped) verdict can never be served
+    // to a request that should run B once B has recovered.
+    const remoteAvailable = this.remoteV.isAvailable();
+    const cacheKey = buildCacheKey(appState, ctx.registryVersion) + (remoteAvailable ? ':B1' : ':B0');
     const cached = this.cache.get(cacheKey);
     if (cached) return cached;
 
@@ -25,9 +28,9 @@ export class CompositeVerifier implements Verifier {
     const a = await this.staticV.verify(appState, code, ctx);
 
     // 3. Short-circuit: run Layer B only if A passed
-    if (!a.ok || !this.remoteV.isAvailable()) {
-      const result = { ...a, durationMs: Date.now() - t0 };
-      this.cache.set(a.cacheKey, result);
+    if (!a.ok || !remoteAvailable) {
+      const result = { ...a, cacheKey, durationMs: Date.now() - t0 };
+      this.cache.set(cacheKey, result);
       return result;
     }
 
@@ -48,12 +51,12 @@ export class CompositeVerifier implements Verifier {
       errors: sorted(deduped.filter(e => e.severity === 'error')),
       warnings: sorted(dedupedW.filter(w => w.severity === 'warning')),
       source: 'composite',
-      cacheKey: a.cacheKey,
+      cacheKey,
       fromCache: false,
       durationMs: Date.now() - t0,
     };
 
-    this.cache.set(a.cacheKey, merged);
+    this.cache.set(cacheKey, merged);
     return merged;
   }
 

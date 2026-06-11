@@ -11,6 +11,8 @@ import { colorIsPlausible } from '../codegen-shared/color-table';
 import { KNOWN_ICONS } from '../codegen-shared/known-icons';
 import { nearestKnown } from '../codegen-shared/nearest';
 import { expandedIsValid } from '../codegen-shared/flex-rules';
+import { bindingPropsFor, HARDCODED_BIND_TYPES, isIncrementable, isClearable } from '../codegen-shared/binding-props';
+import { resolveNavRoute, buildScreenIdToRoute, NAV_UNRESOLVED } from '../codegen-shared/nav-resolve';
 import {
   collectActions,
   actionMethodName,
@@ -32,6 +34,7 @@ interface Frame {
   handlerCollisions: Set<string>;
   nodePath: string;
   parentType: string | null;
+  screenIdToRoute: Map<string, string>;   // for navigate target resolution (C16)
 }
 
 // ── StaticValidator ────────────────────────────────────────────────────────
@@ -73,13 +76,16 @@ export class StaticValidator implements Verifier {
       this.validateScreen(appState.screens[si], si, appState, ctx, emit);
     }
 
-    // C9 — navigation integrity (import-primary; live path strips these)
-    if (appState.navigation?.type === 'bottomNav') {
+    // C9 — navigation integrity (import-primary; live path strips these).
+    // tabs and bottomNav share the bottomNavItems shape and the same codegen
+    // entry point (MainNavigation), so they validate identically.
+    if (appState.navigation?.type === 'bottomNav' || appState.navigation?.type === 'tabs') {
+      const navType = appState.navigation.type;
       const items = appState.navigation.bottomNavItems ?? [];
       for (const item of items) {
         if (!screenIds.has(item.screenId)) {
-          emit(err('C9', `bottomNavItems screenId '${item.screenId}' does not match any screen id`,
-            'static', { problem: 'unknownScreenId', value: item.screenId, availableScreenIds: [...screenIds] }));
+          emit(err('C9', `${navType} item screenId '${item.screenId}' does not match any screen id`,
+            'static', { problem: 'unknownScreenId', value: item.screenId, navType, availableScreenIds: [...screenIds] }));
         }
       }
     }
@@ -150,6 +156,7 @@ export class StaticValidator implements Verifier {
       handlerCollisions,
       nodePath: `screens[${si}].body`,
       parentType: null,
+      screenIdToRoute: buildScreenIdToRoute(appState.screens),
     };
 
     this.walk(screen.body, frame, ctx, emit);
@@ -199,6 +206,13 @@ export class StaticValidator implements Verifier {
       screenIdx: frame.screenIdx,
       nodePath: frame.nodePath,
     };
+
+    // customCode (Phase 5): handle before C5 so it is never treated as unknown
+    if (node.type === 'customCode') {
+      this.checkCustomCode(node, frame, loc, emit);
+      this.walkChildrenOnly(node, frame, ctx, emit);
+      return;
+    }
 
     // C5 — unknown widget type
     const { registrySnapshot: snap } = ctx;
@@ -261,8 +275,14 @@ export class StaticValidator implements Verifier {
       }
     }
 
-    // Validate bindings on this node
-    this.validateBindings(node, frame, loc, emit);
+    // Validate bindings on this node. Resolve the expected boundTo type from the
+    // hardcoded table or the registry widget's stateBinding (C15).
+    let boundExpectedTypes: string[] | undefined = HARDCODED_BIND_TYPES[node.type];
+    if (!boundExpectedTypes && !HARDCODED_NODE_TYPES.has(node.type)) {
+      const bDef = snap.getDefinition(node.type);
+      if (bDef?.stateBinding?.stateType) boundExpectedTypes = [bDef.stateBinding.stateType];
+    }
+    this.validateBindings(node, frame, loc, emit, boundExpectedTypes);
 
     // Determine child frame (item scope)
     let childFrame = frame;
@@ -331,20 +351,33 @@ export class StaticValidator implements Verifier {
     frame: Frame,
     loc: SourceLocation,
     emit: (e: ValidationError) => void,
+    boundExpectedTypes?: string[],
   ): void {
     const p = node.props ?? {};
 
-    // Text content — binding cascade (§6.0.4)
-    if (typeof p.text === 'string') {
-      this.checkTextBinding(p.text, frame, loc, emit);
+    // Binding cascade (§6.0.4). The bindable-prop set is driven by the shared
+    // manifest so the validator inspects exactly the props codegen interpolates
+    // (notably `content` for Text) and the two layers cannot drift.
+    const bindSpec = bindingPropsFor(node.type);
+    for (const key of bindSpec.textBindingProps) {
+      if (typeof p[key] === 'string') {
+        this.checkTextBinding(p[key], frame, loc, emit);
+      }
     }
-    if (typeof p.label === 'string') {
-      this.checkTextBinding(p.label, frame, loc, emit);
-    }
-
-    // boundTo
-    if (typeof p.boundTo === 'string') {
-      this.checkVarRef(p.boundTo, 'boundTo', frame, loc, emit);
+    for (const key of bindSpec.varRefProps) {
+      if (typeof p[key] === 'string') {
+        this.checkVarRef(p[key], key, frame, loc, emit);
+        // C15 — boundTo state-var type must match the widget's expected bind type
+        if (key === 'boundTo' && boundExpectedTypes) {
+          const v = frame.varByName.get(p[key]);
+          if (v && !boundExpectedTypes.includes(v.type)) {
+            emit(err('C15', `Widget '${node.type}' is bound to '${p[key]}' (type '${v.type}'), but it requires ${boundExpectedTypes.join('|')} — the generated binding would be a Dart type error`,
+              'static',
+              { nodeType: node.type, boundTo: p[key], varType: v.type, expectedTypes: boundExpectedTypes, problem: 'bindTypeMismatch' },
+              loc));
+          }
+        }
+      }
     }
 
     // Action prop keys
@@ -457,12 +490,15 @@ export class StaticValidator implements Verifier {
       nodePath: path,
     };
 
-    // C3a — referential integrity
+    // C16 — navigate target must resolve to a screen id or route (shares the
+    // exact resolver codegen uses, so a certified navigate cannot crash at runtime).
     if (a.type === 'navigate') {
-      // C3-navigate: UNREACHABLE on live path (stripNavigateActions), reachable on import
-      if (a.target) {
-        const routes = (frame.screen ? [frame.screen.route] : []);
-        // We can only check against known screens — pass (single-screen MVP defers multi-screen)
+      if (a.target && resolveNavRoute(a.target, frame.screenIdToRoute) === NAV_UNRESOLVED) {
+        emit(err('C16', `navigate target '${a.target}' does not resolve to any screen id or route`,
+          'static',
+          { actionType: 'navigate', target: a.target, problem: 'navTargetUnresolved',
+            knownRoutes: [...frame.screenIdToRoute.values()], knownScreenIds: [...frame.screenIdToRoute.keys()] },
+          loc));
       }
       return;
     }
@@ -471,6 +507,16 @@ export class StaticValidator implements Verifier {
 
     if (a.type === 'addItem') {
       if (a.listName) this.checkListRef(a.listName, ['stringList', 'itemList'], frame, loc, emit, 'C3a');
+      // C15 — clearFields resets `_f = ''` + controller.clear(); string vars only
+      if (Array.isArray(a.clearFields)) {
+        for (const f of a.clearFields) {
+          const v = frame.varByName.get(f);
+          if (v && !isClearable(v.type)) {
+            emit(err('C15', `addItem.clearFields entry '${f}' is type '${v.type}'; only string fields can be cleared (codegen emits "_${f} = ''")`,
+              'static', { actionType: a.type, fieldName: f, varType: v.type, expectedTypes: ['string'], problem: 'clearFieldTypeMismatch' }, loc));
+          }
+        }
+      }
     }
     if (a.type === 'removeItem') {
       if (a.listName) this.checkListRef(a.listName, ['stringList', 'itemList'], frame, loc, emit, 'C3a');
@@ -497,19 +543,34 @@ export class StaticValidator implements Verifier {
       }
     }
     if (a.type === 'increment' || a.type === 'decrement') {
-      if (a.fieldName) this.checkVarRef(a.fieldName, `${a.type}.fieldName`, frame, loc, emit);
+      if (a.fieldName) {
+        this.checkVarRef(a.fieldName, `${a.type}.fieldName`, frame, loc, emit);
+        // C15 — codegen emits `_field++` / `_field--`; only int/double are valid
+        const v = frame.varByName.get(a.fieldName);
+        if (v && !isIncrementable(v.type)) {
+          emit(err('C15', `${a.type} target '${a.fieldName}' is type '${v.type}'; only int/double can be incremented (codegen emits '_${a.fieldName}${a.type === 'increment' ? '++' : '--'}')`,
+            'static', { actionType: a.type, fieldName: a.fieldName, varType: v.type, expectedTypes: ['int', 'double'], problem: 'mutationTypeMismatch' }, loc));
+        }
+      }
+    }
+
+    // setValue / clearField — emitted as inline closures (no named handler), so
+    // they only need their targets to resolve (C1) and type-check (C15 elsewhere).
+    if (a.type === 'setValue') {
+      if (a.fieldName) this.checkVarRef(a.fieldName, 'setValue.fieldName', frame, loc, emit);
+      if (a.valueFrom) this.checkVarRef(a.valueFrom, 'setValue.valueFrom', frame, loc, emit);
+      return;
+    }
+    if (a.type === 'clearField') {
+      const targets = Array.isArray(a.clearFields) && a.clearFields.length
+        ? a.clearFields
+        : (a.fieldName ? [a.fieldName] : []);
+      for (const f of targets) this.checkVarRef(f, 'clearField', frame, loc, emit);
+      return;
     }
 
     // C3b — undefined handler method
     const methodName = actionMethodName(a);
-    if (a.type === 'setValue' || a.type === 'clearField') {
-      emit(err('C3b', `Action '${a.type}' has no handler in generateActionHandlers — method '${methodName}' would be called but never defined`,
-        'static',
-        { actionType: a.type, problem: 'noHandlerEmitted', methodName,
-          note: 'TODO: code-generator.ts:392' },
-        loc));
-      return;
-    }
     if (!frame.declaredHandlers.has(methodName)) {
       // Could be a gated-addItem body site
       emit(err('C3b', `Action '${a.type}' at this site would call '${methodName}' which generateActionHandlers will not emit`,
@@ -612,6 +673,38 @@ export class StaticValidator implements Verifier {
     for (const f of listVar.itemFields ?? []) fields.add(f.name);
 
     return fields;
+  }
+
+  // ── C13 / C14 — customCode (Phase 5) ─────────────────────────────────────
+
+  private checkCustomCode(
+    node: WidgetNode,
+    frame: Frame,
+    loc: SourceLocation,
+    emit: (e: ValidationError) => void,
+  ): void {
+    const GATE_OPEN = process.env.FLOWCRAFT_PHASE5 === '1';
+
+    // C14: customCode present but Phase 5 gate is closed → warn (never repairs, just visible)
+    if (!GATE_OPEN) {
+      emit(warn('C14',
+        'customCode node present but FLOWCRAFT_PHASE5 gate is closed — renders as SizedBox.shrink()',
+        'static',
+        { gateOpen: false, remediation: 'Set FLOWCRAFT_PHASE5=1 and FLOWCRAFT_CUSTOMCODE=1 to enable' },
+        loc));
+      return;
+    }
+
+    // C13: stateDeps ⊄ screen.screenState.variables (error — Layer A asserts this)
+    const stateDeps: string[] = node.props?.custom?.interface?.stateDeps ?? [];
+    const missing = stateDeps.filter(d => !frame.varNames.has(d));
+    if (missing.length > 0) {
+      emit(err('C13',
+        `customCode.stateDeps [${missing.join(', ')}] not found in screen state variables`,
+        'static',
+        { stateDeps, missingDeps: missing, availableVars: [...frame.varNames] },
+        loc));
+    }
   }
 
   // ── C7 / C8 registry checks ───────────────────────────────────────────────

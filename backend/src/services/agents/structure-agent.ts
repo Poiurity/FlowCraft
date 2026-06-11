@@ -2,6 +2,7 @@ import { BaseAgent } from './base-agent.js';
 import type { AppState, Screen, Navigation } from '../../models/appstate.js';
 import { widgetRegistry } from '../widget-registry/registry-manager.js';
 import { StructureEmptyError } from './errors.js';
+import type { SegmentSpec, SegmentPlan } from './planner-agent.js';
 
 export interface StructureResult {
   appName: string;
@@ -274,6 +275,69 @@ export class StructureAgent extends BaseAgent {
       buildSchema()
     );
     return this.enforceSingleScreen(this.sanitizeScreens(raw) as StructureResult);
+  }
+
+  // Phase 5: generate exactly one screen for a given segment spec.
+  async generateSegment(spec: SegmentSpec, plan: SegmentPlan, enrichedPrompt: string): Promise<Screen> {
+    const navTargetNames = spec.navTargets
+      .map(id => plan.segments.find(s => s.screenId === id)?.screenName ?? id)
+      .join(', ');
+
+    const segmentInstruction = [
+      `Generate EXACTLY ONE screen with these FIXED identifiers (do not change them):`,
+      `  id: "${spec.screenId}"`,
+      `  name: "${spec.screenName}"`,
+      `  route: "${spec.route}"`,
+      `  role: ${spec.role} — ${spec.responsibility}`,
+      navTargetNames
+        ? `Navigate ONLY to these screens: ${navTargetNames} (use { type: "navigate", target: "<screenId>" })`
+        : `This screen has no navigation targets — do NOT add navigate actions.`,
+    ].join('\n');
+
+    const userMessage = `${segmentInstruction}\n\nApp description: ${enrichedPrompt}`;
+
+    const raw = await this.callFunction(
+      buildPrompt(),
+      userMessage,
+      'generate_structure',
+      buildSchema(),
+    );
+
+    const result = this.sanitizeScreens(raw) as StructureResult;
+    if (!Array.isArray(result.screens) || result.screens.length === 0) {
+      throw new StructureEmptyError(`generateSegment: no screens produced for segment '${spec.screenId}'`);
+    }
+
+    // enforceSegmentContract overwrites LLM identifiers with spec values (deterministic)
+    return this.enforceSegmentContract(result.screens[0], spec);
+  }
+
+  // Phase 5: overwrite id/name/route from spec; strip navigates to non-permitted targets.
+  private enforceSegmentContract(screen: Screen, spec: SegmentSpec): Screen {
+    screen.id = spec.screenId;
+    screen.name = spec.screenName;
+    screen.route = spec.route;
+    this.stripNavigateActionsScoped(screen.body, new Set(spec.navTargets));
+    return screen;
+  }
+
+  // Phase 5: strip navigate actions whose target is NOT in allowedTargets.
+  private stripNavigateActionsScoped(node: any, allowedTargets: Set<string>): void {
+    if (!node || typeof node !== 'object') return;
+    if (node.props?.action?.type === 'navigate') {
+      if (!allowedTargets.has(node.props.action.target)) delete node.props.action;
+    }
+    if (node.props?.onTap?.type === 'navigate') {
+      if (!allowedTargets.has(node.props.onTap.target)) delete node.props.onTap;
+    }
+    for (const val of Object.values(node.props || {})) {
+      if (val && typeof val === 'object' && 'type' in val) {
+        this.stripNavigateActionsScoped(val, allowedTargets);
+      }
+    }
+    if (Array.isArray(node.children)) {
+      node.children.forEach((c: any) => this.stripNavigateActionsScoped(c, allowedTargets));
+    }
   }
 
   // [MVP] Force single screen — keep only the first screen, remove navigate actions

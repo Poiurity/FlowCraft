@@ -4,6 +4,8 @@ import { widgetRegistry } from './widget-registry/registry-manager.js';
 import type { WidgetDefinition } from './widget-registry/types.js';
 import type { RegistrySnapshot } from './verification/types.js';
 import { resolveColor, namedColor as namedColorShared } from './codegen-shared/color-table.js';
+import { TEXT_CONTENT_PROP } from './codegen-shared/binding-props.js';
+import { resolveNavRoute, buildScreenIdToRoute } from './codegen-shared/nav-resolve.js';
 
 /**
  * Deterministic Flutter code generator.
@@ -14,9 +16,12 @@ export class CodeGenerator {
   private currentScreenVars: StateVariable[] = [];
   // Optional registry snapshot — additive param so all current callers are unaffected.
   private registry: RegistrySnapshot | null = null;
+  // screenId → route, used to resolve navigate targets (shared with the validator).
+  private screenIdToRoute = new Map<string, string>();
 
   generate(state: AppState, registry?: RegistrySnapshot): string {
     this.registry = registry ?? null;
+    this.screenIdToRoute = buildScreenIdToRoute(state.screens);
     const lines: string[] = [];
 
     lines.push("import 'package:flutter/material.dart';");
@@ -144,7 +149,7 @@ export class CodeGenerator {
 
     L.push('      ),');
 
-    if (navigation.type === 'bottomNav' && navigation.bottomNavItems) {
+    if ((navigation.type === 'bottomNav' || navigation.type === 'tabs') && navigation.bottomNavItems) {
       L.push('      home: const MainNavigation(),');
     } else {
       L.push(`      initialRoute: '${navigation.initialRoute}',`);
@@ -162,8 +167,43 @@ export class CodeGenerator {
     if (navigation.type === 'bottomNav' && navigation.bottomNavItems) {
       L.push('');
       L.push(this.generateBottomNav(state));
+    } else if (navigation.type === 'tabs' && navigation.bottomNavItems) {
+      L.push('');
+      L.push(this.generateTabsScaffold(state));
     }
 
+    return L.join('\n');
+  }
+
+  private generateTabsScaffold(state: AppState): string {
+    const items = state.navigation.bottomNavItems || [];
+    const L: string[] = [];
+
+    L.push('class MainNavigation extends StatelessWidget {');
+    L.push('  const MainNavigation({super.key});');
+    L.push('  @override');
+    L.push('  Widget build(BuildContext context) {');
+    L.push('    return DefaultTabController(');
+    L.push(`      length: ${items.length},`);
+    L.push('      child: Scaffold(');
+    L.push('        appBar: AppBar(');
+    L.push(`          title: const Text('${this.esc(state.appName)}'),`);
+    L.push('          bottom: TabBar(tabs: [');
+    for (const item of items) {
+      L.push(`            Tab(icon: Icon(${this.icon(item.icon)}), text: '${this.esc(item.label)}'),`);
+    }
+    L.push('          ]),');
+    L.push('        ),');
+    L.push('        body: TabBarView(children: [');
+    for (const item of items) {
+      const screen = state.screens.find(s => s.id === item.screenId);
+      if (screen) L.push(`          ${screen.name}(),`);
+    }
+    L.push('        ]),');
+    L.push('      ),');
+    L.push('    );');
+    L.push('  }');
+    L.push('}');
     return L.join('\n');
   }
 
@@ -338,9 +378,11 @@ export class CodeGenerator {
             L.push(`      if (_${srcVar}.trim().isEmpty) return;`);
           }
           L.push(`      _${a.listName}.add({${templateParts.join(', ')}});`);
-          // Clear fields after add
+          // Clear fields after add — only string vars have a controller and an
+          // assignable '' (C15 flags non-string entries for repair).
           if (a.clearFields) {
             for (const f of a.clearFields) {
+              if (vars.find(v => v.name === f)?.type !== 'string') continue;
               L.push(`      _${f} = '';`);
               L.push(`      _${f}Controller.clear();`);
             }
@@ -471,6 +513,7 @@ export class CodeGenerator {
       case 'checkbox': return this.wCheckbox(node, indent);
       case 'listTile': return this.wListTile(node, state, indent);
       case 'switch': return this.wSwitch(node, indent);
+      case 'customCode': return this.wCustomCode(node, indent);
       default: {
         const def = this.registry
           ? this.registry.getDefinition(node.type)
@@ -536,46 +579,89 @@ export class CodeGenerator {
     }
   }
 
+  // ── customCode escape hatch (Phase 5) ─────────────────────────────────────
+
+  private wCustomCode(node: WidgetNode, indent: number): string {
+    const pad = ' '.repeat(indent);
+    const GATE_OPEN =
+      process.env.FLOWCRAFT_PHASE5 === '1' && process.env.FLOWCRAFT_CUSTOMCODE === '1';
+
+    if (!GATE_OPEN || !node.props?.custom?.dart) {
+      // Gate closed or no dart fragment — emit silent placeholder (C14 warns about this)
+      return `${pad}const SizedBox.shrink()`;
+    }
+
+    const custom = node.props.custom;
+    const dart = String(custom.dart);
+    const stateDeps: string[] = Array.isArray(custom.interface?.stateDeps) ? custom.interface.stateDeps : [];
+    const cp = ' '.repeat(indent + 2);
+    const cpp = ' '.repeat(indent + 4);
+
+    const lines: string[] = [`${pad}Builder(`];
+    lines.push(`${cp}builder: (context) {`);
+    for (const dep of stateDeps) {
+      lines.push(`${cpp}final _dep_${dep} = _${dep};`);
+    }
+    lines.push(`${cpp}return (${dart});`);
+    lines.push(`${cp}},`);
+    lines.push(`${pad})`);
+    return lines.join('\n');
+  }
+
   // ── Hardcoded widgets (complex logic) ──
 
   private wText(n: WidgetNode, ind: number): string {
     const pad = ' '.repeat(ind);
     const p = n.props;
-    let content = String(p.content ?? '');
+    const content = String(p[TEXT_CONTENT_PROP] ?? '');
 
     // Data binding: {{variable}} or {{item.field}}
     const isBinding = content.includes('{{') && content.includes('}}');
     let contentExpr: string;
     if (isBinding) {
-      const dartExpr = content.replace(/\{\{(.+?)\}\}/g, (_, expr) => {
-        const trimmed = expr.trim();
-        if (trimmed === 'item') return `\${item}`;
-        if (trimmed.startsWith('item.')) return `\${item['${trimmed.slice(5)}']}`;
-        if (trimmed.includes('.')) return `\${_${trimmed}}`;
-        return `\${_${trimmed}}`;
-      });
-      contentExpr = `'${dartExpr}'`;
+      // Escape the LITERAL segments (apostrophe / backslash / $) exactly like a
+      // plain string, and inject ${...} only for the binding segments. Without
+      // this, an apostrophe or '$' in bound text terminates / mis-interpolates
+      // the generated Dart string literal.
+      const re = /\{\{(.+?)\}\}/g;
+      let out = '';
+      let last = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(content)) !== null) {
+        out += this.esc(content.slice(last, m.index));
+        const trimmed = m[1].trim();
+        if (trimmed === 'item') out += `\${item}`;
+        else if (trimmed.startsWith('item.')) out += `\${item['${trimmed.slice(5)}']}`;
+        else out += `\${_${trimmed}}`;
+        last = m.index + m[0].length;
+      }
+      out += this.esc(content.slice(last));
+      contentExpr = `'${out}'`;
     } else {
       contentExpr = `'${this.esc(content)}'`;
     }
 
     const parts: string[] = [contentExpr];
 
+    // Build a SINGLE TextStyle. A static style and a conditional decoration must
+    // share one `style:` arg — emitting two is a duplicate-named-argument error.
+    const styleArgs: string[] = [];
     if (p.style) {
-      const sp: string[] = [];
-      if (p.style.fontSize) sp.push(`fontSize: r(${p.style.fontSize})`);
-      if (p.style.fontWeight) sp.push(`fontWeight: ${this.fontWeight(p.style.fontWeight)}`);
-      if (p.style.color) sp.push(`color: ${this.color(p.style.color)}`);
-      if (p.style.fontStyle === 'italic') sp.push('fontStyle: FontStyle.italic');
-      if (p.style.letterSpacing) sp.push(`letterSpacing: r(${p.style.letterSpacing})`);
-      if (p.style.decoration) sp.push(`decoration: ${this.textDecoration(p.style.decoration)}`);
-      if (sp.length > 0) parts.push(`style: TextStyle(${sp.join(', ')})`);
+      if (p.style.fontSize) styleArgs.push(`fontSize: r(${p.style.fontSize})`);
+      if (p.style.fontWeight) styleArgs.push(`fontWeight: ${this.fontWeight(p.style.fontWeight)}`);
+      if (p.style.color) styleArgs.push(`color: ${this.color(p.style.color)}`);
+      if (p.style.fontStyle === 'italic') styleArgs.push('fontStyle: FontStyle.italic');
+      if (p.style.letterSpacing) styleArgs.push(`letterSpacing: r(${p.style.letterSpacing})`);
+      // A conditional decoration overrides any static one.
+      if (p.style.decoration && !p.conditionalDecoration) {
+        styleArgs.push(`decoration: ${this.textDecoration(p.style.decoration)}`);
+      }
     }
-
     if (p.conditionalDecoration) {
       const cd = p.conditionalDecoration;
-      parts.push(`style: TextStyle(decoration: (item['${cd.field}'] as bool? ?? false) ? TextDecoration.lineThrough : TextDecoration.none${p.style?.fontSize ? `, fontSize: r(${p.style.fontSize})` : ''})`);
+      styleArgs.push(`decoration: (item['${cd.field}'] as bool? ?? false) ? TextDecoration.lineThrough : TextDecoration.none`);
     }
+    if (styleArgs.length > 0) parts.push(`style: TextStyle(${styleArgs.join(', ')})`);
 
     if (p.textAlign) parts.push(`textAlign: TextAlign.${p.textAlign}`);
     if (p.maxLines) parts.push(`maxLines: ${p.maxLines}`);
@@ -969,9 +1055,12 @@ export class CodeGenerator {
     const INDEX_REQUIRED = new Set(['removeItem', 'toggleItemField']);
 
     switch (action.type) {
-      case 'navigate':
-        const t = (action.target || '').replace(/^\//, '');
-        return `() => Navigator.pushNamed(context, '/${t}')`;
+      case 'navigate': {
+        // Resolve via the shared resolver: screenId → route, literal route, or a
+        // sentinel the validator (C16) flags rather than a silent wrong guess.
+        const route = resolveNavRoute(action.target || '', this.screenIdToRoute);
+        return `() => Navigator.pushNamed(context, '${route}')`;
+      }
       case 'pop':
         return '() => Navigator.pop(context)';
       case 'removeItem':
@@ -980,11 +1069,50 @@ export class CodeGenerator {
       case 'addItem':
       case 'increment':
       case 'decrement':
-      case 'setValue':
-      case 'clearField':
         return `${methodName}`;
+      case 'setValue':
+        return this.setValueClosure(action);
+      case 'clearField':
+        return this.clearFieldClosure(action);
       default:
         return '() {}';
+    }
+  }
+
+  // Inline closures (no named handler) — avoids any undeclared-method risk.
+  private setValueClosure(a: any): string {
+    const field = a.fieldName;
+    if (!field) return '() {}';
+    const targetType = this.currentScreenVars.find(v => v.name === field)?.type ?? 'string';
+    const valExpr = a.valueFrom ? `_${a.valueFrom}` : this.coerceLiteral(a.value, targetType);
+    return `() => setState(() => _${field} = ${valExpr})`;
+  }
+
+  private clearFieldClosure(a: any): string {
+    const targets: string[] = Array.isArray(a.clearFields) && a.clearFields.length
+      ? a.clearFields
+      : (a.fieldName ? [a.fieldName] : []);
+    if (targets.length === 0) return '() {}';
+    const stmts: string[] = [];
+    for (const f of targets) {
+      const t = this.currentScreenVars.find(v => v.name === f)?.type ?? 'string';
+      if (t === 'stringList' || t === 'itemList') {
+        stmts.push(`_${f}.clear();`);            // final list — reset in place
+      } else {
+        const empty = t === 'int' ? '0' : t === 'double' ? '0.0' : t === 'bool' ? 'false' : `''`;
+        stmts.push(`_${f} = ${empty};`);
+        if (t === 'string' || t === 'int' || t === 'double') stmts.push(`_${f}Controller.clear();`);
+      }
+    }
+    return `() => setState(() { ${stmts.join(' ')} })`;
+  }
+
+  private coerceLiteral(value: any, type: string): string {
+    switch (type) {
+      case 'int': { const n = parseInt(value, 10); return String(Number.isFinite(n) ? n : 0); }
+      case 'double': { const n = parseFloat(value); if (!Number.isFinite(n)) return '0.0'; return Number.isInteger(n) ? n.toFixed(1) : String(n); }
+      case 'bool': return value === true || value === 'true' ? 'true' : 'false';
+      default: return `'${this.esc(String(value ?? ''))}'`;
     }
   }
 
@@ -1106,6 +1234,12 @@ export class CodeGenerator {
   }
 
   private esc(s: string): string {
-    return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\$/g, '\\\\\\$');
+    // Escape for a Dart string literal: backslash, apostrophe, and '$' (which
+    // would otherwise start interpolation). '$' becomes a single-backslash '\$'
+    // so currency text renders cleanly instead of leaking a literal backslash.
+    return s
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "\\'")
+      .replace(/\$/g, () => '\\$');
   }
 }

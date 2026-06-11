@@ -1,0 +1,11 @@
+{
+  "issues": [
+    {
+      "kind": "warning",
+      "code": "unused_import",
+      "message": "Unused import: 'package:flutter/widgets.dart'.",
+      "line": 2,
+      "column": 1
+    }
+  ]
+}
