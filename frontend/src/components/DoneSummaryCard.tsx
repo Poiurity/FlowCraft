@@ -79,7 +79,7 @@ export function DoneSummaryCard({ loopInfo, screenCount, onRegenerate, onUndo }:
       {degraded && degradeReason && (
         <div className="done-summary__degrade">
           <span className="done-summary__degrade-label">{L.done.degradeLabel}</span>
-          <span>{degradeReason}</span>
+          <span>{(degradeReason && L.done.degradeReasons[degradeReason]) ?? degradeReason}</span>
         </div>
       )}
 

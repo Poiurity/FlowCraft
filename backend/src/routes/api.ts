@@ -59,7 +59,7 @@ router.post('/generate', async (req: Request, res: Response) => {
       recordLoopResult(result);
 
       const changeReport = diffAppState(currentState, result.appState);
-      const changelog = explainChanges(changeReport, result.appState.appName);
+      const changelog = explainChanges(changeReport, result.appState.appName, resolveLang(lang));
 
       // §4.3: degrade-prior means the prior state is already stored — do not overwrite.
       if (result.outcome !== 'degrade-prior') {
@@ -107,7 +107,7 @@ router.post('/generate', async (req: Request, res: Response) => {
     const { appState: newState } = await orchestrator.process(prompt, currentState);
 
     const changeReport = diffAppState(currentState, newState);
-    const changelog = explainChanges(changeReport, newState.appName);
+    const changelog = explainChanges(changeReport, newState.appName, resolveLang(lang));
 
     stateManager.setState(sessionId, newState);
     const code = codeGenerator.generate(newState);

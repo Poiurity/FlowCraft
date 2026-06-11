@@ -53,6 +53,7 @@ export interface Dict {
     repairs: (n: number) => string;
     screens: (n: number) => string;
     degradeLabel: string;
+    degradeReasons: Record<string, string>;
     criticWarn: string;
     criticReloop: string;
     regenerate: string;
@@ -161,6 +162,16 @@ const ko: Dict = {
     repairs: (n) => `${n}회 수정`,
     screens: (n) => `${n}개 화면`,
     degradeLabel: '부분 완료 이유:',
+    degradeReasons: {
+      no_progress: '수정 진전 없음',
+      oscillation: '수정 반복(진동) 감지',
+      unrepairable: '자동 수정 불가',
+      wall_clock: '시간 초과',
+      budget_exhausted: '수정 시도 횟수 소진',
+      structure_empty: '화면 구조 생성 실패',
+      'degrade-prior': '이전 상태 유지',
+      phase5_compose_failed: '화면 조합 실패',
+    },
     criticWarn: '일부 요구사항이 완전히 반영되지 않았을 수 있습니다.',
     criticReloop: '품질 기준을 충족하지 못했습니다. 재생성을 고려하세요.',
     regenerate: '재생성',
@@ -269,6 +280,16 @@ const en: Dict = {
     repairs: (n) => `${n} repair${n === 1 ? '' : 's'}`,
     screens: (n) => `${n} screen${n === 1 ? '' : 's'}`,
     degradeLabel: 'Reason for partial result:',
+    degradeReasons: {
+      no_progress: 'No repair progress',
+      oscillation: 'Repair oscillation detected',
+      unrepairable: 'Could not auto-repair',
+      wall_clock: 'Timed out',
+      budget_exhausted: 'Out of repair attempts',
+      structure_empty: 'Screen structure generation failed',
+      'degrade-prior': 'Kept the previous version',
+      phase5_compose_failed: 'Screen composition failed',
+    },
     criticWarn: 'Some requirements may not be fully reflected.',
     criticReloop: 'Did not meet the quality bar. Consider regenerating.',
     regenerate: 'Regenerate',
