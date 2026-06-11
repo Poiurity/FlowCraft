@@ -1,75 +1,73 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, CheckCircle2, Lightbulb, ListChecks } from 'lucide-react';
-import type { Changelog } from '../services/api';
+import { Send, Loader2, Info, Sparkles, Wrench } from 'lucide-react';
+import type { Changelog, LoopInfo } from '../services/api';
+import type { SendResult } from '../App';
+import { DoneSummaryCard } from './DoneSummaryCard';
+import { useLang } from '../i18n/LanguageContext';
 
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   changelog?: Changelog;
+  loopInfo?: LoopInfo;
+  /** Seed greeting — rendered from the active language dictionary. */
+  seed?: boolean;
   timestamp: Date;
 }
 
 interface ChatPanelProps {
-  onSend: (prompt: string) => Promise<Changelog>;
+  onSend: (prompt: string) => Promise<SendResult>;
   isLoading: boolean;
+  screenCount?: number;
 }
 
-function ChangelogMessage({ changelog }: { changelog: Changelog }) {
+// Compact chip summary — shown inline in chat for non-degraded, non-notable results
+function LoopStatusChip({ loopInfo }: { loopInfo: LoopInfo }) {
+  const { L } = useLang();
+  if (loopInfo.degraded) return null; // handled by DoneSummaryCard
+
+  const repairCount = loopInfo.attempts.filter(a => a.source === 'repair').length;
+  const hasWarnings = loopInfo.finalState === 'SUCCESS_WITH_WARNINGS';
+  const fidelity = loopInfo.fidelity;
+
+  // Only show chip for notable metrics
+  if (repairCount === 0 && !hasWarnings && fidelity == null) return null;
+
   return (
-    <div className="space-y-2.5">
-      <div className="flex items-start gap-2 text-emerald-400">
-        <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-        <span className="text-[13px] font-medium leading-snug">{changelog.summary}</span>
-      </div>
-
-      {changelog.changes.length > 0 && (
-        <div className="ml-6">
-          <div className="flex items-center gap-1.5 text-[11px] text-white/35 mb-1">
-            <ListChecks className="w-3 h-3" />
-            <span>변경 사항</span>
-          </div>
-          <ul className="space-y-0.5">
-            {changelog.changes.map((change, i) => {
-              const isIndented = change.startsWith('  - ');
-              return (
-                <li
-                  key={i}
-                  className={`text-[12px] leading-relaxed ${isIndented ? 'ml-3 text-white/40' : 'text-white/60'}`}
-                >
-                  {isIndented ? change.trim() : `· ${change}`}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
+    <div className="loop-status-chip">
+      {repairCount > 0 && (
+        <span className="loop-chip loop-chip--amber">
+          <Wrench size={9} />
+          {L.chip.repairs(repairCount)}
+        </span>
       )}
-
-      {changelog.usageTips.length > 0 && (
-        <div className="ml-6 border-t border-white/5 pt-2">
-          <div className="flex items-center gap-1.5 text-[11px] text-amber-400/80 mb-1">
-            <Lightbulb className="w-3 h-3" />
-            <span>사용법</span>
-          </div>
-          <ul className="space-y-0.5">
-            {changelog.usageTips.map((tip, i) => (
-              <li key={i} className="text-[12px] text-white/50 leading-relaxed">· {tip}</li>
-            ))}
-          </ul>
-        </div>
+      {fidelity != null && (
+        <span className={`loop-chip ${fidelity >= 85 ? 'loop-chip--green' : fidelity >= 65 ? 'loop-chip--amber' : 'loop-chip--red'}`}>
+          <Sparkles size={9} />
+          {L.chip.fidelity(fidelity)}
+        </span>
+      )}
+      {hasWarnings && (
+        <span className="loop-chip loop-chip--blue">
+          <Info size={9} />
+          {L.chip.warnings}
+        </span>
       )}
     </div>
   );
 }
 
-export function ChatPanel({ onSend, isLoading }: ChatPanelProps) {
+export function ChatPanel({ onSend, isLoading, screenCount }: ChatPanelProps) {
+  const { L } = useLang();
   const [input, setInput] = useState('');
+  const [lastPrompt, setLastPrompt] = useState('');
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '0',
       role: 'assistant',
-      content:
-        '만들고 싶은 앱을 자유롭게 설명해 주세요.\n\n예: "할 일 목록이 있는 투두 앱 만들어줘"',
+      content: '',
+      seed: true,
       timestamp: new Date(),
     },
   ]);
@@ -80,21 +78,18 @@ export function ChatPanel({ onSend, isLoading }: ChatPanelProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSubmit = async () => {
-    const trimmed = input.trim();
-    if (!trimmed || isLoading) return;
-
+  const handleSubmitPrompt = async (prompt: string) => {
+    if (!prompt || isLoading) return;
     const userMsg: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: trimmed,
+      content: prompt,
       timestamp: new Date(),
     };
     setMessages(prev => [...prev, userMsg]);
-    setInput('');
-
+    setLastPrompt(prompt);
     try {
-      const changelog = await onSend(trimmed);
+      const { changelog, loopInfo } = await onSend(prompt);
       setMessages(prev => [
         ...prev,
         {
@@ -102,6 +97,7 @@ export function ChatPanel({ onSend, isLoading }: ChatPanelProps) {
           role: 'assistant',
           content: '',
           changelog,
+          loopInfo,
           timestamp: new Date(),
         },
       ]);
@@ -111,11 +107,18 @@ export function ChatPanel({ onSend, isLoading }: ChatPanelProps) {
         {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          content: `오류가 발생했습니다: ${err.message}`,
+          content: L.chat.errorPrefix(err.message),
           timestamp: new Date(),
         },
       ]);
     }
+  };
+
+  const handleSubmit = () => {
+    const trimmed = input.trim();
+    if (!trimmed || isLoading) return;
+    setInput('');
+    handleSubmitPrompt(trimmed);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -126,69 +129,95 @@ export function ChatPanel({ onSend, isLoading }: ChatPanelProps) {
   };
 
   return (
-    <div className="flex flex-col h-full bg-surface-1">
+    <div className="chat-panel">
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+      <div className="chat-panel__messages">
         {messages.map((msg, idx) => (
           <div
             key={msg.id}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}
+            className={`chat-msg chat-msg--${msg.role} animate-fade-in`}
             style={{ animationDelay: `${idx * 30}ms` }}
           >
-            <div
-              className={`max-w-[88%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed ${
-                msg.role === 'user'
-                  ? 'bg-primary text-white rounded-br-md'
-                  : 'bg-surface-3 text-white/75 border border-border rounded-bl-md'
-              }`}
-            >
-              {msg.changelog ? (
-                <ChangelogMessage changelog={msg.changelog} />
+            <div className="chat-msg__bubble">
+              {msg.loopInfo ? (
+                <div>
+                  {/* Degraded → full DoneSummaryCard */}
+                  {msg.loopInfo.degraded ? (
+                    <DoneSummaryCard
+                      loopInfo={msg.loopInfo}
+                      screenCount={screenCount}
+                      onRegenerate={lastPrompt ? () => handleSubmitPrompt(lastPrompt) : undefined}
+                    />
+                  ) : (
+                    <>
+                      {/* Non-degraded: compact chip + changelog */}
+                      <LoopStatusChip loopInfo={msg.loopInfo} />
+                      {msg.changelog && (
+                        <div className="chat-changelog">
+                          <p className="chat-changelog__summary">{msg.changelog.summary}</p>
+                          {msg.changelog.changes.length > 0 && (
+                            <ul className="chat-changelog__changes">
+                              {msg.changelog.changes.map((c, i) => (
+                                <li key={i} className={c.startsWith('  - ') ? 'chat-changelog__change--indent' : ''}>
+                                  {c.startsWith('  - ') ? c.trim() : `· ${c}`}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      )}
+                      {/* Success with fidelity/repairs — show DoneSummaryCard for detail */}
+                      {(msg.loopInfo.fidelity != null || msg.loopInfo.attempts.some(a => a.source === 'repair')) && (
+                        <DoneSummaryCard
+                          loopInfo={msg.loopInfo}
+                          screenCount={screenCount}
+                          onRegenerate={lastPrompt ? () => handleSubmitPrompt(lastPrompt) : undefined}
+                        />
+                      )}
+                    </>
+                  )}
+                </div>
               ) : (
-                <span className="whitespace-pre-wrap">{msg.content}</span>
+                <span className="chat-msg__text">{msg.seed ? L.chat.greeting : msg.content}</span>
               )}
             </div>
           </div>
         ))}
 
         {isLoading && (
-          <div className="flex justify-start animate-fade-in">
-            <div className="bg-surface-3 border border-border rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-3">
-              <div className="flex gap-1">
-                <div className="w-1.5 h-1.5 rounded-full bg-primary loading-dot" />
-                <div className="w-1.5 h-1.5 rounded-full bg-primary loading-dot" />
-                <div className="w-1.5 h-1.5 rounded-full bg-primary loading-dot" />
+          <div className="chat-msg chat-msg--assistant animate-fade-in">
+            <div className="chat-msg__bubble chat-msg__bubble--loading">
+              <div className="loading-dots">
+                <div className="loading-dot" style={{ animationDelay: '0ms' }} />
+                <div className="loading-dot" style={{ animationDelay: '160ms' }} />
+                <div className="loading-dot" style={{ animationDelay: '320ms' }} />
               </div>
-              <span className="text-xs text-white/35">생성 중...</span>
+              <span className="loading-label">{L.chat.loading}</span>
             </div>
           </div>
         )}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <div className="p-3 border-t border-border">
-        <div className="flex gap-2 bg-surface-2 border border-border rounded-xl px-3 py-2 focus-within:border-border-focus transition-colors">
+      {/* Composer */}
+      <div className="chat-panel__composer">
+        <div className="composer-box">
           <textarea
             ref={textareaRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="앱을 설명해 주세요..."
+            placeholder={L.chat.placeholder}
             rows={1}
-            className="flex-1 bg-transparent text-white text-[16px] resize-none outline-none placeholder:text-white/25 max-h-32 items-center"
+            className="composer-textarea"
             disabled={isLoading}
           />
           <button
             onClick={handleSubmit}
             disabled={!input.trim() || isLoading}
-            className="p-2 rounded-lg bg-primary text-white hover:bg-primary-light disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150 shrink-0 shadow-[0_0_8px_rgba(55,137,252,0.2)] hover:shadow-[0_0_16px_rgba(55,137,252,0.35)]"
+            className="composer-send-btn"
           >
-            {isLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Send className="w-4 h-4" />
-            )}
+            {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
           </button>
         </div>
       </div>

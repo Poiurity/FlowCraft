@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Database } from 'lucide-react';
 import type { AppState } from '../types/appstate';
+import { useLang } from '../i18n/LanguageContext';
 
 interface AppStateViewerProps {
   appState: AppState | null;
@@ -82,13 +83,14 @@ function JsonNode({ name, value, depth = 0 }: { name: string; value: any; depth?
 }
 
 export function AppStateViewer({ appState }: AppStateViewerProps) {
+  const { L } = useLang();
   if (!appState) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3">
         <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center">
           <Database className="w-6 h-6 text-white/15" />
         </div>
-        <p className="text-white/25 text-sm">아직 AppState가 없습니다</p>
+        <p className="text-white/25 text-sm">{L.stateView.empty}</p>
       </div>
     );
   }

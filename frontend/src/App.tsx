@@ -1,99 +1,174 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { ChatPanel } from './components/ChatPanel';
-import { DartPadEmbed } from './components/DartPadEmbed';
+import { DeviceFrame } from './components/DeviceFrame';
 import { AppStateViewer } from './components/AppStateViewer';
-import { generateFromPrompt, type Changelog } from './services/api';
-import { MonitorSmartphone, Database } from 'lucide-react';
+import { WorkspaceTabs, type WorkspaceTab } from './components/WorkspaceTabs';
+import { PipelineSpine } from './components/PipelineSpine';
+import { PipelineRail } from './components/PipelineRail';
+import { CodeView } from './components/CodeView';
+import { PipelineProvider, usePipeline } from './state/PipelineContext';
+import { generateFromPrompt, generateStream, type Changelog, type LoopInfo } from './services/api';
+import { buildReplay } from './services/replay-engine';
+import { usePipelinePlayer } from './hooks/usePipelinePlayer';
+import { LanguageProvider, useLang } from './i18n/LanguageContext';
+import { LanguageToggle } from './components/LanguageToggle';
 import type { AppState } from './types/appstate';
+import type { PipelineEvent } from './services/pipeline-events';
 
-type RightTab = 'code' | 'preview' | 'state';
+export interface SendResult {
+  changelog: Changelog;
+  loopInfo?: LoopInfo;
+}
 
-function App() {
+// Inner app — needs to be inside PipelineProvider to access usePipeline
+function AppInner() {
+  const { state, dispatch, emitEvent, reset } = usePipeline();
+  const { lang, L } = useLang();
+
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [appState, setAppState] = useState<AppState | null>(null);
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [rightTab, setRightTab] = useState<RightTab>('preview');
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('activity');
+  const [replayEvents, setReplayEvents] = useState<PipelineEvent[]>([]);
 
-  const handleSend = async (prompt: string): Promise<Changelog> => {
+  const isRegenerating = isLoading && state.repairs.length > 0;
+
+  const { skip } = usePipelinePlayer(replayEvents, dispatch, {
+    onDone: () => {
+      // Auto-switch to preview when pipeline completes
+      setWorkspaceTab('preview');
+    },
+  });
+
+  const handleSend = useCallback(async (prompt: string): Promise<SendResult> => {
     setIsLoading(true);
+    reset();
+    setWorkspaceTab('activity');
+
     try {
-      const result = await generateFromPrompt(prompt, sessionId);
+      // Phase 2: try SSE stream first; fall back to single-shot + replay
+      let result;
+      try {
+        result = await generateStream(prompt, sessionId, emitEvent, lang);
+      } catch (sseErr) {
+        console.warn('[App] SSE failed, falling back to single-shot:', sseErr);
+        result = await generateFromPrompt(prompt, sessionId, lang);
+      }
+
       setSessionId(result.sessionId);
       setAppState(result.appState);
       setCode(result.code);
-      setRightTab('preview');
-      return result.changelog;
+
+      const loopInfo: LoopInfo | undefined = result.attempts != null
+        ? {
+            degraded: result.degraded ?? false,
+            degradeReason: result.degradeReason,
+            fidelity: result.fidelity,
+            finalState: result.finalState,
+            attempts: result.attempts,
+          }
+        : undefined;
+
+      // If SSE events were dispatched live, the spine is already up-to-date.
+      // If we fell back to single-shot, start the replay animation.
+      if (loopInfo && state.status !== 'done') {
+        const events = buildReplay(result, L);
+        setReplayEvents(events);
+      }
+
+      return { changelog: result.changelog, loopInfo };
     } finally {
       setIsLoading(false);
     }
+  }, [sessionId, reset, emitEvent, state.status, lang, L]);
+
+  const handleTabChange = (tab: WorkspaceTab) => {
+    setWorkspaceTab(tab);
+    // Clicking Activity tab while running: no-op on tab, spine is already visible
   };
 
-  const tabs: { id: RightTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'preview', label: '미리보기', icon: <MonitorSmartphone className="w-3.5 h-3.5" /> },
-    { id: 'state', label: '상태', icon: <Database className="w-3.5 h-3.5" /> },
-  ];
-
   return (
-    <div className="h-screen flex flex-col bg-surface-base text-white">
+    <div className="app-root">
       {/* Header */}
-      <header className="flex items-center justify-between px-5 py-2.5 bg-surface-1 border-b border-border shrink-0">
-        <div className="flex items-center gap-3">
-          <img src="/logo.png" alt="FlowCraft" className="w-7 h-7 rounded-lg shadow-[0_0_12px_rgba(55,137,252,0.3)]" />
+      <header className="app-header">
+        <div className="app-header__brand">
+          <img src="/logo.png" alt="FlowCraft" className="app-header__logo" />
           <div>
-            <h1 className="text-sm font-bold tracking-tight text-white">FlowCraft</h1>
-            <p className="text-[10px] text-white/35 -mt-0.5">AI App Builder</p>
+            <h1 className="app-header__title">FlowCraft</h1>
+            <p className="app-header__subtitle">{L.header.subtitle}</p>
           </div>
         </div>
-        {sessionId && (
-          <div className="flex items-center gap-1.5">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-[11px] text-white/30 font-mono">
-              {sessionId.slice(0, 8)}
-            </span>
-          </div>
-        )}
+
+        <PipelineRail onClickActivity={() => setWorkspaceTab('activity')} />
+
+        <div className="app-header__right">
+          <LanguageToggle />
+          {sessionId && (
+            <div className="app-header__session">
+              <div className="app-header__session-dot" />
+              <span className="app-header__session-id">{sessionId.slice(0, 8)}</span>
+            </div>
+          )}
+        </div>
       </header>
 
-      {/* Main Content */}
-      <div className="flex-1 flex min-h-0">
-        {/* Chat Panel */}
-        <div className="w-[380px] shrink-0">
-          <ChatPanel onSend={handleSend} isLoading={isLoading} />
-        </div>
+      {/* Main */}
+      <main className="app-main">
+        {/* Chat panel */}
+        <aside className="app-chat">
+          <ChatPanel
+            onSend={handleSend}
+            isLoading={isLoading}
+            screenCount={appState?.screens?.length}
+          />
+        </aside>
 
-        {/* Right Panel */}
-        <div className="flex-1 flex flex-col min-w-0 border-l border-border">
-          {/* Tabs */}
-          <div className="flex items-center gap-0.5 px-3 py-1.5 bg-surface-1 border-b border-border shrink-0">
-            {tabs.map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => setRightTab(tab.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-150 ${
-                  rightTab === tab.id
-                    ? 'bg-primary/15 text-primary-light'
-                    : 'text-white/40 hover:text-white/70 hover:bg-white/5'
-                }`}
-              >
-                {tab.icon}
-                {tab.label}
-              </button>
-            ))}
+        {/* Workspace */}
+        <section className="app-workspace">
+          <div className="workspace-header">
+            <WorkspaceTabs activeTab={workspaceTab} onChange={handleTabChange} />
           </div>
 
-          {/* Tab Content */}
-          <div className="flex-1 min-h-0 relative">
-            <div className={rightTab === 'preview' ? 'absolute inset-0' : 'absolute inset-0 invisible pointer-events-none'}>
-              <DartPadEmbed code={code} />
+          <div className="workspace-body">
+            {/* Activity tab — Pipeline Spine (hero surface) */}
+            <div className={workspaceTab === 'activity' ? 'workspace-tab-panel' : 'workspace-tab-panel workspace-tab-panel--hidden'}>
+              <div className="activity-panel">
+                <PipelineSpine
+                  dispatch={dispatch}
+                  onSkip={isLoading ? skip : undefined}
+                />
+              </div>
             </div>
-            <div className={rightTab === 'state' ? 'absolute inset-0' : 'hidden'}>
+
+            {/* Preview tab — Device Frame + DartPad */}
+            <div className={workspaceTab === 'preview' ? 'workspace-tab-panel' : 'workspace-tab-panel workspace-tab-panel--hidden'}>
+              <DeviceFrame code={code} isRegenerating={isRegenerating} />
+            </div>
+
+            {/* Code tab */}
+            <div className={workspaceTab === 'code' ? 'workspace-tab-panel' : 'workspace-tab-panel workspace-tab-panel--hidden'}>
+              <CodeView code={code} />
+            </div>
+
+            {/* State tab */}
+            <div className={workspaceTab === 'state' ? 'workspace-tab-panel' : 'workspace-tab-panel workspace-tab-panel--hidden'}>
               <AppStateViewer appState={appState} />
             </div>
           </div>
-        </div>
-      </div>
+        </section>
+      </main>
     </div>
+  );
+}
+
+function App() {
+  return (
+    <LanguageProvider>
+      <PipelineProvider>
+        <AppInner />
+      </PipelineProvider>
+    </LanguageProvider>
   );
 }
 
