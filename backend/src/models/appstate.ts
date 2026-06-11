@@ -64,7 +64,7 @@ export const ActionSchema = z.object({
     'navigate', 'pop', 'none',
     'addItem', 'removeItem', 'toggleItemField',
     'increment', 'decrement', 'setValue', 'clearField',
-    'showSnackBar', 'showDialog',
+    'showSnackBar', 'showDialog', 'submitForm',
   ]),
   target: z.string().optional(),
   listName: z.string().optional(),

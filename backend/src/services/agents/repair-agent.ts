@@ -24,6 +24,7 @@ C16      - navigate action's target does not match any screen id or route — wo
 C17      - a seeded itemList value does not match its declared field type (e.g. a non-numeric string for an int field)
 C18      - visibleWhen predicate is invalid (undeclared var, or op incompatible with the var's type)
 C19      - textField validators config is invalid (unknown rule, or minLength without a numeric value)
+C20      - dropdown/radioGroup is missing a non-empty options array (each option needs a value)
 
 PATCH OP TYPES:
 - "set"           — set the node at path to value (creating a missing key is allowed)

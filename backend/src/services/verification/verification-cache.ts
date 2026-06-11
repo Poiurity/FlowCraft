@@ -48,8 +48,12 @@ export function stableStringify(v: unknown): string {
 // closures → ScaffoldMessenger / AlertDialog).
 // 1.10.0 — Phase 2e (forms m1): textField `validators` → TextFormField + validator
 // (required/email/minLength) + autovalidate; validator C19.
-export const CODEGEN_VERSION = process.env.CODEGEN_VERSION ?? '1.10.0';
-export const STATIC_VALIDATOR_VERSION = '1.10.0';
+// 1.11.0 — Phase 2e (forms m2): dropdown/radioGroup hardcoded widgets (string-bound,
+// options array) → DropdownButtonFormField / RadioListTile column; C20.
+// 1.12.0 — Phase 2e (forms m3): screen-level Form (GlobalKey<FormState>) wrapped
+// when validated fields / submitForm present; submitForm action gates on validate().
+export const CODEGEN_VERSION = process.env.CODEGEN_VERSION ?? '1.12.0';
+export const STATIC_VALIDATOR_VERSION = '1.12.0';
 
 export function buildCacheKey(
   appState: unknown,

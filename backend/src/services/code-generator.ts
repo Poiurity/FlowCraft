@@ -252,12 +252,33 @@ export class CodeGenerator {
 
   private generateScreen(screen: Screen, state: AppState): string {
     this.currentScreenVars = screen.screenState?.variables || [];
-    const isStateful = !!screen.screenState && screen.screenState.variables.length > 0;
+    // A form needs a mutable GlobalKey<FormState>, which a const StatelessWidget
+    // can't hold — so a form-bearing screen is always stateful.
+    const isStateful = (!!screen.screenState && screen.screenState.variables.length > 0)
+      || this.screenNeedsForm(screen);
 
     if (isStateful) {
       return this.generateStatefulScreen(screen, state);
     }
     return this.generateStatelessScreen(screen, state);
+  }
+
+  // A screen needs a Form when it has validated fields or a submitForm action.
+  private screenNeedsForm(screen: Screen): boolean {
+    if (collectScreenActions(screen).some((a: any) => a?.type === 'submitForm')) return true;
+    let found = false;
+    const walk = (node: any) => {
+      if (found || !node || typeof node !== 'object') return;
+      if (node.type === 'textField' && Array.isArray(node.props?.validators) && node.props.validators.length) {
+        found = true; return;
+      }
+      for (const v of Object.values(node.props || {})) {
+        if (v && typeof v === 'object' && 'type' in (v as any)) walk(v);
+      }
+      if (Array.isArray(node.children)) node.children.forEach(walk);
+    };
+    walk(screen.body);
+    return found;
   }
 
   private generateStatelessScreen(screen: Screen, state: AppState): string {
@@ -291,6 +312,9 @@ export class CodeGenerator {
     L.push('}');
     L.push('');
     L.push(`class _${screen.name}State extends State<${screen.name}> {`);
+
+    const needsForm = this.screenNeedsForm(screen);
+    if (needsForm) L.push('  final _formKey = GlobalKey<FormState>();');
 
     // State variable declarations
     for (const v of vars) {
@@ -328,7 +352,8 @@ export class CodeGenerator {
     L.push('    return Scaffold(');
     if (screen.backgroundColor) L.push(`      backgroundColor: ${this.color(screen.backgroundColor)},`);
     if (screen.appBar) L.push(this.appBarCode(screen.appBar, 6));
-    L.push(`      body: ${this.widget(screen.body, state, 6).trim()},`);
+    const stBody = this.widget(screen.body, state, 6).trim();
+    L.push(`      body: ${needsForm ? `Form(key: _formKey, child: ${stBody})` : stBody},`);
     if (screen.fab) L.push(this.fabCode(screen.fab, 6));
     L.push('    );');
     L.push('  }');
@@ -554,6 +579,8 @@ export class CodeGenerator {
       case 'checkbox': return this.wCheckbox(node, indent);
       case 'listTile': return this.wListTile(node, state, indent);
       case 'switch': return this.wSwitch(node, indent);
+      case 'dropdown': return this.wDropdown(node, indent);
+      case 'radioGroup': return this.wRadioGroup(node, indent);
       case 'customCode': return this.wCustomCode(node, indent);
       default: {
         const def = this.registry
@@ -1026,6 +1053,37 @@ export class CodeGenerator {
     return `validator: (value) { ${checks.join(' ')} return null; }`;
   }
 
+  private wDropdown(n: WidgetNode, ind: number): string {
+    const pad = ' '.repeat(ind);
+    const cp = ' '.repeat(ind + 2);
+    const p = n.props;
+    const options: any[] = Array.isArray(p.options) ? p.options : [];
+    const bound = p.boundTo;
+    const items = options.map(o =>
+      `${cp}  DropdownMenuItem(value: '${this.esc(String(o?.value ?? ''))}', child: Text('${this.esc(String(o?.label ?? o?.value ?? ''))}')),`,
+    ).join('\n');
+    const parts: string[] = [];
+    parts.push(`decoration: InputDecoration(${p.label ? `labelText: '${this.esc(p.label)}', ` : ''}border: const OutlineInputBorder())`);
+    if (bound) parts.push(`value: _${bound}.isEmpty ? null : _${bound}`);
+    parts.push(`items: [\n${items}\n${cp}]`);
+    if (bound) parts.push(`onChanged: (v) => setState(() => _${bound} = v ?? '')`);
+    return `${pad}DropdownButtonFormField<String>(\n${cp}${parts.join(`,\n${cp}`)},\n${pad})`;
+  }
+
+  private wRadioGroup(n: WidgetNode, ind: number): string {
+    const pad = ' '.repeat(ind);
+    const cp = ' '.repeat(ind + 2);
+    const p = n.props;
+    const options: any[] = Array.isArray(p.options) ? p.options : [];
+    const bound = p.boundTo;
+    const groupValue = bound ? `_${bound}` : `''`;
+    const onChanged = bound ? `(v) => setState(() => _${bound} = v ?? '')` : `(v) {}`;
+    const tiles = options.map(o =>
+      `${cp}  RadioListTile<String>(title: Text('${this.esc(String(o?.label ?? o?.value ?? ''))}'), value: '${this.esc(String(o?.value ?? ''))}', groupValue: ${groupValue}, onChanged: ${onChanged}),`,
+    ).join('\n');
+    return `${pad}Column(\n${cp}children: [\n${tiles}\n${cp}],\n${pad})`;
+  }
+
   private wCheckbox(n: WidgetNode, ind: number): string {
     const pad = ' '.repeat(ind);
     const p = n.props;
@@ -1151,6 +1209,8 @@ export class CodeGenerator {
         const titlePart = action.title ? `title: Text('${this.esc(String(action.title))}'), ` : '';
         return `() => showDialog(context: context, builder: (ctx) => AlertDialog(${titlePart}content: Text('${this.esc(String(action.message ?? ''))}'), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))]))`;
       }
+      case 'submitForm':
+        return `() { if (_formKey.currentState?.validate() ?? false) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${this.esc(String(action.message ?? 'Submitted'))}'))); } }`;
       default:
         return '() {}';
     }

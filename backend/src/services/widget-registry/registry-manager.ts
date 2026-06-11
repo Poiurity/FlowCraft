@@ -10,6 +10,7 @@ const REGISTRY_PATH = join(__dirname, 'registry.json');
 export const HARDCODED_WIDGETS: ReadonlySet<string> = new Set([
   'text', 'button', 'textField', 'checkbox', 'listView', 'listTile', 'switch',
   'column', 'row', 'container', 'padding', 'sizedBox', 'card', 'center', 'expanded',
+  'dropdown', 'radioGroup',
 ]);
 
 export class WidgetRegistryManager {

@@ -159,6 +159,22 @@ describe('golden: textField validators', () => {
   });
 });
 
+// ── 12) Form wrapper + submit gating ─────────────────────────────────────────
+describe('golden: form submit gating', () => {
+  test('a validated screen gets a Form key, wraps the body, and submit gates on validate()', () => {
+    const code = gen(appWith(
+      { type: 'column', props: {}, children: [
+        { type: 'textField', props: { label: 'Email', boundTo: 'email', validators: [{ rule: 'required' }, { rule: 'email' }] } },
+        { type: 'button', props: { label: 'Submit', action: { type: 'submitForm', message: 'Signed up!' } } },
+      ] },
+      [{ name: 'email', type: 'string', initialValue: '' }]));
+    assert.ok(code.includes('final _formKey = GlobalKey<FormState>();'), 'must declare the form key');
+    assert.ok(code.includes('Form(key: _formKey, child:'), 'must wrap the body in a Form');
+    assert.ok(code.includes('_formKey.currentState?.validate() ?? false'), 'submit must gate on validate()');
+    assert.ok(code.includes("Text('Signed up!')"), 'submit confirmation message');
+  });
+});
+
 // ── 10) dialog / snackbar actions ────────────────────────────────────────────
 describe('golden: dialog / snackbar actions', () => {
   test('showSnackBar lowers to a ScaffoldMessenger snackbar', () => {

@@ -62,6 +62,8 @@ export const HARDCODED_BIND_TYPES: Record<string, StateVarType[]> = {
   checkbox: ['bool'],
   switch: ['bool'],
   textField: ['string', 'int', 'double'],
+  dropdown: ['string'],
+  radioGroup: ['string'],
 };
 
 /** Only int/double can be the target of increment/decrement (codegen emits `_x++`). */

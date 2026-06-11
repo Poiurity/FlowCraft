@@ -4,6 +4,7 @@
 export const HARDCODED_NODE_TYPES: ReadonlySet<string> = new Set([
   'text', 'button', 'textField', 'checkbox', 'listView', 'listTile', 'switch',
   'column', 'row', 'container', 'padding', 'sizedBox', 'card', 'center', 'expanded',
+  'dropdown', 'radioGroup',
 ]);
 
 // KNOWN_FLUTTER_WIDGETS: closed allowlist for C11 (keyed on def.dartWidget, NOT on node.type).

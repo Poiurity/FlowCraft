@@ -397,6 +397,18 @@ export class StaticValidator implements Verifier {
       }
     }
 
+    // C20 — selection widgets need a non-empty options array of { value }
+    if (node.type === 'dropdown' || node.type === 'radioGroup') {
+      const options = p.options;
+      if (!Array.isArray(options) || options.length === 0) {
+        emit(err('C20', `'${node.type}' requires a non-empty 'options' array`,
+          'static', { problem: 'optionsEmpty', nodeType: node.type }, loc));
+      } else if (!options.every(o => o && typeof o === 'object' && o.value !== undefined)) {
+        emit(err('C20', `'${node.type}' options must each have a 'value'`,
+          'static', { problem: 'optionsMalformed', nodeType: node.type }, loc));
+      }
+    }
+
     // C19 — textField validators config (rule allowlist; minLength needs a number)
     if (node.type === 'textField' && Array.isArray(p.validators)) {
       for (const v of p.validators) {
@@ -617,8 +629,8 @@ export class StaticValidator implements Verifier {
       return;
     }
 
-    // showSnackBar / showDialog — self-contained inline closures, nothing to resolve.
-    if (a.type === 'showSnackBar' || a.type === 'showDialog') {
+    // showSnackBar / showDialog / submitForm — self-contained inline closures.
+    if (a.type === 'showSnackBar' || a.type === 'showDialog' || a.type === 'submitForm') {
       return;
     }
 

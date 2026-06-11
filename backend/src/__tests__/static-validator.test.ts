@@ -166,6 +166,34 @@ describe('computed bindings', () => {
   });
 });
 
+// ── C20 — dropdown / radioGroup options ──────────────────────────────────────
+
+describe('C20', () => {
+  test('dropdown with valid options + string boundTo passes', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'color', type: 'string', initialValue: '' }] };
+    state.screens[0].body = { type: 'dropdown', props: { boundTo: 'color', options: [{ label: 'Red', value: 'red' }, { label: 'Blue', value: 'blue' }] } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.equal(result.ok, true, `unexpected errors: ${result.errors.map(e => e.code).join(',')}`);
+  });
+
+  test('dropdown with no options fires C20', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'color', type: 'string', initialValue: '' }] };
+    state.screens[0].body = { type: 'dropdown', props: { boundTo: 'color', options: [] } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C20'));
+  });
+
+  test('radioGroup bound to a non-string var fires C15', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'n', type: 'int', initialValue: 0 }] };
+    state.screens[0].body = { type: 'radioGroup', props: { boundTo: 'n', options: [{ value: 'a' }] } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C15'), 'radioGroup expects a string var');
+  });
+});
+
 // ── C19 — textField validators config ────────────────────────────────────────
 
 describe('C19', () => {
