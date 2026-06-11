@@ -166,6 +166,34 @@ describe('computed bindings', () => {
   });
 });
 
+// ── C19 — textField validators config ────────────────────────────────────────
+
+describe('C19', () => {
+  test('valid validators pass', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'email', type: 'string', initialValue: '' }] };
+    state.screens[0].body = { type: 'textField', props: { boundTo: 'email', validators: [{ rule: 'required' }, { rule: 'email' }, { rule: 'minLength', value: 8 }] } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.equal(result.errors.filter(e => e.code === 'C19').length, 0, `unexpected C19: ${result.errors.map(e => e.code).join(',')}`);
+  });
+
+  test('unknown validator rule fires C19', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'x', type: 'string', initialValue: '' }] };
+    state.screens[0].body = { type: 'textField', props: { boundTo: 'x', validators: [{ rule: 'phoneNumber' }] } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C19'));
+  });
+
+  test('minLength without numeric value fires C19', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'x', type: 'string', initialValue: '' }] };
+    state.screens[0].body = { type: 'textField', props: { boundTo: 'x', validators: [{ rule: 'minLength' }] } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C19'));
+  });
+});
+
 // ── C18 — visibleWhen ─────────────────────────────────────────────────────────
 
 describe('C18', () => {

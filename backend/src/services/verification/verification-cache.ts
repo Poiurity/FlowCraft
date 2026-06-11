@@ -46,8 +46,10 @@ export function stableStringify(v: unknown): string {
 // (Visibility wrap) via a shared closed grammar; member access escalated to C1; C18.
 // 1.9.0 — Phase 2d: showSnackBar / showDialog actions (self-contained inline
 // closures → ScaffoldMessenger / AlertDialog).
-export const CODEGEN_VERSION = process.env.CODEGEN_VERSION ?? '1.9.0';
-export const STATIC_VALIDATOR_VERSION = '1.9.0';
+// 1.10.0 — Phase 2e (forms m1): textField `validators` → TextFormField + validator
+// (required/email/minLength) + autovalidate; validator C19.
+export const CODEGEN_VERSION = process.env.CODEGEN_VERSION ?? '1.10.0';
+export const STATIC_VALIDATOR_VERSION = '1.10.0';
 
 export function buildCacheKey(
   appState: unknown,

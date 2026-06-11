@@ -991,13 +991,39 @@ export class CodeGenerator {
       }
     }
 
-    // Submit action
+    // Validation → TextFormField with a validator + inline autovalidation.
+    const hasValidators = Array.isArray(p.validators) && p.validators.length > 0;
+
+    // Submit action (TextField → onSubmitted, TextFormField → onFieldSubmitted)
     if (p.onSubmit) {
       const methodName = this.actionMethodName(p.onSubmit);
-      parts.push(`onSubmitted: (_) => ${methodName}()`);
+      parts.push(`${hasValidators ? 'onFieldSubmitted' : 'onSubmitted'}: (_) => ${methodName}()`);
+    }
+
+    if (hasValidators) {
+      parts.push(this.buildFieldValidator(p.validators));
+      parts.push('autovalidateMode: AutovalidateMode.onUserInteraction');
+      return `${pad}TextFormField(\n${cp}${parts.join(`,\n${cp}`)},\n${pad})`;
     }
 
     return `${pad}TextField(\n${cp}${parts.join(`,\n${cp}`)},\n${pad})`;
+  }
+
+  // Lowers a textField `validators` array to a Dart `validator:` callback.
+  private buildFieldValidator(validators: any[]): string {
+    const checks: string[] = [];
+    for (const v of validators) {
+      if (!v || typeof v !== 'object') continue;
+      if (v.rule === 'required') {
+        checks.push(`if (value == null || value.isEmpty) return '${this.esc(v.message || 'Required')}';`);
+      } else if (v.rule === 'email') {
+        checks.push(`if (value != null && value.isNotEmpty && !RegExp(r'^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$').hasMatch(value)) return '${this.esc(v.message || 'Enter a valid email')}';`);
+      } else if (v.rule === 'minLength') {
+        const n = Number(v.value) || 0;
+        checks.push(`if ((value?.length ?? 0) < ${n}) return '${this.esc(v.message || `Must be at least ${n} characters`)}';`);
+      }
+    }
+    return `validator: (value) { ${checks.join(' ')} return null; }`;
   }
 
   private wCheckbox(n: WidgetNode, ind: number): string {

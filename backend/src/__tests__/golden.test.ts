@@ -137,6 +137,28 @@ describe('golden: seeded lists', () => {
   });
 });
 
+// ── 11) textField validators → TextFormField ─────────────────────────────────
+describe('golden: textField validators', () => {
+  test('validators lower to a TextFormField with a validator and autovalidate', () => {
+    const code = gen(appWith(
+      { type: 'textField', props: { label: 'Email', boundTo: 'email',
+        validators: [{ rule: 'required' }, { rule: 'email' }, { rule: 'minLength', value: 5 }] } },
+      [{ name: 'email', type: 'string', initialValue: '' }]));
+    assert.ok(code.includes('TextFormField('), 'must be a TextFormField');
+    assert.ok(code.includes('validator: (value) {'), 'must have a validator callback');
+    assert.ok(code.includes('value == null || value.isEmpty'), 'required check');
+    assert.ok(code.includes('RegExp(') && code.includes('.hasMatch(value)'), 'email check');
+    assert.ok(code.includes('(value?.length ?? 0) < 5'), 'minLength check');
+    assert.ok(code.includes('AutovalidateMode.onUserInteraction'), 'inline autovalidation');
+  });
+
+  test('no validators stays a plain TextField', () => {
+    const code = gen(appWith({ type: 'textField', props: { label: 'Name', boundTo: 'name' } },
+      [{ name: 'name', type: 'string', initialValue: '' }]));
+    assert.ok(code.includes('TextField(') && !code.includes('TextFormField('));
+  });
+});
+
 // ── 10) dialog / snackbar actions ────────────────────────────────────────────
 describe('golden: dialog / snackbar actions', () => {
   test('showSnackBar lowers to a ScaffoldMessenger snackbar', () => {

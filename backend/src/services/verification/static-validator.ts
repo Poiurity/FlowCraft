@@ -397,6 +397,20 @@ export class StaticValidator implements Verifier {
       }
     }
 
+    // C19 — textField validators config (rule allowlist; minLength needs a number)
+    if (node.type === 'textField' && Array.isArray(p.validators)) {
+      for (const v of p.validators) {
+        const rule = v?.rule;
+        if (!rule || !['required', 'email', 'minLength'].includes(rule)) {
+          emit(err('C19', `textField validator has unknown rule '${rule}' (allowed: required, email, minLength)`,
+            'static', { problem: 'unknownValidatorRule', rule }, loc));
+        } else if (rule === 'minLength' && typeof v.value !== 'number') {
+          emit(err('C19', `textField minLength validator requires a numeric 'value'`,
+            'static', { problem: 'minLengthNoValue' }, loc));
+        }
+      }
+    }
+
     // C18 — visibleWhen predicate must resolve (declared var + op compatible type)
     if (p.visibleWhen) {
       const lookup = (n: string) => frame.varByName.get(n)?.type;

@@ -23,6 +23,7 @@ C15      - Binding/mutation target has the wrong type (e.g. increment on a strin
 C16      - navigate action's target does not match any screen id or route — would crash at runtime ("no route")
 C17      - a seeded itemList value does not match its declared field type (e.g. a non-numeric string for an int field)
 C18      - visibleWhen predicate is invalid (undeclared var, or op incompatible with the var's type)
+C19      - textField validators config is invalid (unknown rule, or minLength without a numeric value)
 
 PATCH OP TYPES:
 - "set"           — set the node at path to value (creating a missing key is allowed)
