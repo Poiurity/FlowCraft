@@ -129,22 +129,67 @@ describe('C1', () => {
 
 // ── C1-dotted — member access binding ────────────────────────────────────
 
-describe('C1-dotted', () => {
-  test('warning for dotted binding on declared var', async () => {
+describe('member access (C1)', () => {
+  test('unsupported member access on a declared var is now a C1 error', async () => {
     const state = validBase();
     state.screens[0].screenState = { variables: [{ name: 'user', type: 'string', initialValue: '' }] };
     state.screens[0].body = { type: 'text', props: { text: '{{user.name}}' } };
     const result = await validator.verify(state, '', makeCtx());
-    const dotted = result.warnings.filter(e => e.code === 'C1-dotted');
-    assert.equal(dotted.length, 1);
+    assert.ok(result.errors.some(e => e.code === 'C1'), 'member access on a scalar must be a hard error');
   });
 
   test('error for dotted binding on undeclared var head', async () => {
     const state = validBase();
     state.screens[0].body = { type: 'text', props: { text: '{{order.total}}' } };
     const result = await validator.verify(state, '', makeCtx());
-    const c1 = result.errors.filter(e => e.code === 'C1');
-    assert.ok(c1.length > 0, 'should emit C1 for undeclared head');
+    assert.ok(result.errors.some(e => e.code === 'C1'), 'should emit C1 for undeclared head');
+  });
+});
+
+// ── Computed bindings — .length / .isEmpty / .isNotEmpty ──────────────────────
+
+describe('computed bindings', () => {
+  test('{{list.length}} on a list var is valid (no error)', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'tasks', type: 'itemList', initialValue: [], itemFields: [] }] };
+    state.screens[0].body = { type: 'text', props: { content: 'You have {{tasks.length}} tasks' } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.equal(result.errors.filter(e => e.code === 'C1').length, 0, `unexpected C1: ${result.errors.map(e => e.code).join(',')}`);
+  });
+
+  test('.length on a non-list/non-string var (int) is rejected as C1', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'count', type: 'int', initialValue: 0 }] };
+    state.screens[0].body = { type: 'text', props: { content: '{{count.length}}' } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C1'), '.length on int must be rejected');
+  });
+});
+
+// ── C18 — visibleWhen ─────────────────────────────────────────────────────────
+
+describe('C18', () => {
+  test('valid visibleWhen (isNotEmpty on a list) passes', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'items', type: 'stringList', initialValue: [] }] };
+    state.screens[0].body = { type: 'text', props: { content: 'Has items', visibleWhen: { var: 'items', op: 'isNotEmpty' } } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.equal(result.errors.filter(e => e.code === 'C18').length, 0);
+  });
+
+  test('isTrue on a non-bool var fires C18', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'items', type: 'stringList', initialValue: [] }] };
+    state.screens[0].body = { type: 'text', props: { content: 'X', visibleWhen: { var: 'items', op: 'isTrue' } } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C18'), 'isTrue on a list var must be C18');
+  });
+
+  test('visibleWhen on an undeclared var fires C18', async () => {
+    const state = validBase();
+    state.screens[0].body = { type: 'text', props: { content: 'X', visibleWhen: { var: 'ghost', op: 'isEmpty' } } };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C18'));
   });
 });
 
@@ -199,15 +244,43 @@ describe('C3b', () => {
     assert.equal(result.errors.filter(e => e.code === 'C3b').length, 0);
   });
 
-  test('fires for appBar action (collectActions never visits appBar)', async () => {
+  test('showSnackBar / showDialog are clean inline actions (no errors)', async () => {
     const state = validBase();
-    state.screens[0].screenState = { variables: [{ name: 'items', type: 'stringList', initialValue: [] }] };
+    state.screens[0].body = {
+      type: 'column', props: {}, children: [
+        { type: 'button', props: { label: 'Toast', action: { type: 'showSnackBar', message: 'Saved' } } },
+        { type: 'button', props: { label: 'Ask', action: { type: 'showDialog', message: 'Sure?' } } },
+      ],
+    };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.equal(result.ok, true, `unexpected errors: ${result.errors.map(e => e.code).join(',')}`);
+  });
+
+  // appBar mutation actions are now collected like body actions (Phase 2b).
+  test('appBar addItem to a valid list is no longer C3b', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [
+      { name: 'items', type: 'stringList', initialValue: [] },
+      { name: 'q', type: 'string', initialValue: '' },
+    ] };
     state.screens[0].appBar = {
       title: 'Test',
       actions: [{ icon: 'add', action: { type: 'addItem', listName: 'items', valueFrom: 'q' } }],
     };
     const result = await validator.verify(state, '', makeCtx());
-    assert.ok(result.errors.some(e => e.code === 'C3b'), 'appBar addItem should be C3b');
+    assert.equal(result.errors.filter(e => e.code === 'C3b').length, 0,
+      `appBar addItem should be collected, not C3b — got ${result.errors.map(e => e.code).join(',')}`);
+  });
+
+  test('appBar removeItem is still blocked — no item scope (C4)', async () => {
+    const state = validBase();
+    state.screens[0].screenState = { variables: [{ name: 'items', type: 'stringList', initialValue: [] }] };
+    state.screens[0].appBar = {
+      title: 'Test',
+      actions: [{ icon: 'delete', action: { type: 'removeItem', listName: 'items' } }],
+    };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C4'), 'appBar removeItem requires item scope → C4');
   });
 });
 
@@ -516,6 +589,36 @@ describe('C9 tabs', () => {
     };
     const result = await validator.verify(state, '', makeCtx('import'));
     assert.equal(result.errors.filter(e => e.code === 'C9').length, 0);
+  });
+});
+
+// ── C17 — seeded itemList value vs declared field type ───────────────────────
+
+describe('C17', () => {
+  test('fires when a seeded value mismatches its declared field type', async () => {
+    const state = validBase();
+    state.screens[0].screenState = {
+      variables: [{
+        name: 'rows', type: 'itemList',
+        itemFields: [{ name: 'qty', type: 'int' }],
+        initialValue: [{ qty: 'not-a-number' }],
+      }],
+    };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.ok(result.errors.some(e => e.code === 'C17'), `expected C17, got ${result.errors.map(e => e.code).join(',')}`);
+  });
+
+  test('no C17 when seeded values match declared field types', async () => {
+    const state = validBase();
+    state.screens[0].screenState = {
+      variables: [{
+        name: 'rows', type: 'itemList',
+        itemFields: [{ name: 'qty', type: 'int' }, { name: 'done', type: 'bool' }],
+        initialValue: [{ qty: 2, done: true }, { qty: 5, done: false }],
+      }],
+    };
+    const result = await validator.verify(state, '', makeCtx());
+    assert.equal(result.errors.filter(e => e.code === 'C17').length, 0);
   });
 });
 

@@ -64,6 +64,7 @@ export const ActionSchema = z.object({
     'navigate', 'pop', 'none',
     'addItem', 'removeItem', 'toggleItemField',
     'increment', 'decrement', 'setValue', 'clearField',
+    'showSnackBar', 'showDialog',
   ]),
   target: z.string().optional(),
   listName: z.string().optional(),
@@ -72,6 +73,8 @@ export const ActionSchema = z.object({
   value: z.any().optional(),          // literal for setValue (coerced to fieldName's type)
   clearFields: z.array(z.string()).optional(),
   itemTemplate: z.record(z.string(), z.any()).optional(),
+  message: z.string().optional(),     // snackbar / dialog body text
+  title: z.string().optional(),       // dialog title
 });
 
 // ── Widget node (recursive) ──

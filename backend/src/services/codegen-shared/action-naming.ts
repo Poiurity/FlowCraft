@@ -40,14 +40,27 @@ export function collectActions(node: WidgetNode): Action[] {
   return results;
 }
 
+// All action sites that produce handler methods: body + fab + appBar. Index-
+// required actions (removeItem/toggleItemField) are excluded from appBar because
+// there is no item scope there (the validator blocks them via C4). Shared by
+// codegen (generateActionHandlers) and the validator (declaredHandlerMethods) so
+// the handler oracle and the emission site cannot drift.
+export function collectScreenActions(screen: Screen): Action[] {
+  const actions = collectActions(screen.body);
+  if (screen.fab?.action) actions.push(screen.fab.action);
+  for (const item of screen.appBar?.actions ?? []) {
+    if (item.action && !INDEX_REQUIRED.has(item.action.type)) actions.push(item.action);
+  }
+  return actions;
+}
+
 // §6.0.5 — bug-for-bug mirror of generateActionHandlers: dedup-key → per-type gate → method name.
 // Returns the set of Dart method names generateActionHandlers would emit, plus collision names.
 export function declaredHandlerMethods(
   screen: Screen,
   vars: StateVariable[],
 ): { declared: Set<string>; collisions: Set<string> } {
-  const actions = collectActions(screen.body);
-  if (screen.fab?.action) actions.push(screen.fab.action);
+  const actions = collectScreenActions(screen);
 
   const emittedByDedup = new Map<string, Action>();
   for (const a of actions) {

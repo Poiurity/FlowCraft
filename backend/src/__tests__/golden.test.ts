@@ -117,6 +117,62 @@ describe('golden: navigate resolves through the shared resolver', () => {
   });
 });
 
+// ── 8) seeded lists render populated (initialValue honored, type-coerced) ─────
+describe('golden: seeded lists', () => {
+  test('stringList initialValue emits a populated, escaped literal', () => {
+    const code = gen(appWith({ type: 'column', props: {}, children: [] },
+      [{ name: 'tags', type: 'stringList', initialValue: ['a', "b's", '$c'] }]));
+    assert.ok(code.includes("final List<String> _tags = ['a', 'b\\'s', '\\$c']"), `got: ${code.split('\n').find(l => l.includes('_tags'))}`);
+  });
+
+  test('itemList initialValue emits rows with values coerced to declared field types', () => {
+    const code = gen(appWith({ type: 'column', props: {}, children: [] },
+      [{ name: 'products', type: 'itemList',
+         itemFields: [{ name: 'title', type: 'string' }, { name: 'price', type: 'double' }, { name: 'sale', type: 'bool' }],
+         initialValue: [{ title: 'Pen', price: '3', sale: 'true' }] }]));
+    const line = code.split('\n').find(l => l.includes('_products')) ?? '';
+    assert.ok(line.includes("'title': 'Pen'"), `string field: ${line}`);
+    assert.ok(line.includes("'price': 3.0"), `double coercion: ${line}`);
+    assert.ok(line.includes("'sale': true"), `bool coercion: ${line}`);
+  });
+});
+
+// ── 10) dialog / snackbar actions ────────────────────────────────────────────
+describe('golden: dialog / snackbar actions', () => {
+  test('showSnackBar lowers to a ScaffoldMessenger snackbar', () => {
+    const code = gen(appWith({ type: 'button', props: { label: 'Save', action: { type: 'showSnackBar', message: "Saved! It's done" } } }));
+    assert.ok(code.includes("ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Saved! It\\'s done')))"), `got: ${code.split('\n').find(l => l.includes('SnackBar'))}`);
+  });
+
+  test('showDialog lowers to an AlertDialog with an OK button', () => {
+    const code = gen(appWith({ type: 'button', props: { label: 'Info', action: { type: 'showDialog', title: 'Heads up', message: 'Are you sure?' } } }));
+    const line = code.split('\n').find(l => l.includes('AlertDialog')) ?? '';
+    assert.ok(line.includes("showDialog(context: context"), 'must call showDialog');
+    assert.ok(line.includes("title: Text('Heads up')"), 'dialog title');
+    assert.ok(line.includes("content: Text('Are you sure?')"), 'dialog content');
+    assert.ok(line.includes('Navigator.pop(ctx)'), 'OK button dismisses');
+  });
+});
+
+// ── 9) computed bindings + visibleWhen lower to real Dart ────────────────────
+describe('golden: computed bindings + visibleWhen', () => {
+  test('{{list.length}} lowers to _list.length interpolation', () => {
+    const code = gen(appWith({ type: 'text', props: { content: '{{tasks.length}} left' } },
+      [{ name: 'tasks', type: 'itemList', initialValue: [], itemFields: [] }]));
+    assert.ok(code.includes('${_tasks.length}'), `got: ${code.split('\n').find(l => l.includes('tasks.length')) ?? code.split('\n').find(l => l.includes('left'))}`);
+  });
+
+  test('visibleWhen wraps the node in a Visibility with the lowered predicate', () => {
+    const code = gen(appWith(
+      { type: 'column', props: {}, children: [
+        { type: 'text', props: { content: 'No items yet', visibleWhen: { var: 'items', op: 'isEmpty' } } },
+      ] },
+      [{ name: 'items', type: 'stringList', initialValue: [] }]));
+    assert.ok(code.includes('Visibility('), 'must wrap in Visibility');
+    assert.ok(code.includes('visible: _items.isEmpty'), `predicate not lowered: ${code.split('\n').filter(l => l.includes('visible')).join(' | ')}`);
+  });
+});
+
 // ── 7) tabs navigation is actually generated (was silently degraded to stack) ──
 describe('golden: tabs navigation builds a real TabBar', () => {
   test('navigation.type "tabs" emits DefaultTabController + TabBar + TabBarView', () => {

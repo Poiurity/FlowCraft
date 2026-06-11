@@ -6,6 +6,8 @@ import type { RegistrySnapshot } from './verification/types.js';
 import { resolveColor, namedColor as namedColorShared } from './codegen-shared/color-table.js';
 import { TEXT_CONTENT_PROP } from './codegen-shared/binding-props.js';
 import { resolveNavRoute, buildScreenIdToRoute } from './codegen-shared/nav-resolve.js';
+import { collectScreenActions } from './codegen-shared/action-naming.js';
+import { resolveComputed, resolveVisibleWhen } from './codegen-shared/expr.js';
 
 /**
  * Deterministic Flutter code generator.
@@ -338,8 +340,8 @@ export class CodeGenerator {
 
   private generateActionHandlers(screen: Screen, vars: StateVariable[]): string[] {
     const L: string[] = [];
-    const actions = this.collectActions(screen.body);
-    if (screen.fab?.action) actions.push(screen.fab.action);
+    // body + fab + appBar (shared with the validator's handler oracle).
+    const actions = collectScreenActions(screen);
 
     const seen = new Set<string>();
 
@@ -483,18 +485,57 @@ export class CodeGenerator {
         return `double _${v.name} = ${v.initialValue ?? 0.0};`;
       case 'bool':
         return `bool _${v.name} = ${v.initialValue ?? false};`;
-      case 'stringList':
-        return `final List<String> _${v.name} = [];`;
-      case 'itemList':
-        return `final List<Map<String, dynamic>> _${v.name} = [];`;
+      case 'stringList': {
+        const init = Array.isArray(v.initialValue) ? v.initialValue : [];
+        if (init.length === 0) return `final List<String> _${v.name} = [];`;
+        const elems = init.map(s => `'${this.esc(String(s ?? ''))}'`).join(', ');
+        return `final List<String> _${v.name} = [${elems}];`;
+      }
+      case 'itemList': {
+        const init = Array.isArray(v.initialValue) ? v.initialValue : [];
+        if (init.length === 0) return `final List<Map<String, dynamic>> _${v.name} = [];`;
+        const fieldType = new Map((v.itemFields ?? []).map(f => [f.name, f.type]));
+        const rows = init.map((row: any) => {
+          const pairs = Object.entries(row ?? {}).map(
+            ([k, val]) => `'${k}': ${this.coerceMapValue(val, fieldType.get(k))}`,
+          );
+          return `{${pairs.join(', ')}}`;
+        }).join(', ');
+        return `final List<Map<String, dynamic>> _${v.name} = [${rows}];`;
+      }
       default:
         return `dynamic _${v.name};`;
     }
   }
 
+  // Coerce a seeded map value by its declared field type, falling back to the
+  // JS runtime type when the field is undeclared. The list is Map<String,dynamic>
+  // so any literal is valid Dart; coercion keeps `item['x'] as bool/int` casts safe.
+  private coerceMapValue(val: any, type?: string): string {
+    if (type === 'int' || type === 'double' || type === 'bool' || type === 'string') {
+      return this.coerceLiteral(val, type);
+    }
+    if (typeof val === 'boolean' || typeof val === 'number') return String(val);
+    return `'${this.esc(String(val ?? ''))}'`;
+  }
+
   // ── Widget code generation ──
 
   private widget(node: WidgetNode, state: AppState, indent: number): string {
+    const rendered = this.renderNode(node, state, indent);
+    const vw = node.props?.visibleWhen;
+    if (vw) {
+      const pred = resolveVisibleWhen(vw, (n: string) => this.currentScreenVars.find(v => v.name === n)?.type);
+      if (pred) {
+        const pad = ' '.repeat(indent);
+        const cp = ' '.repeat(indent + 2);
+        return `${pad}Visibility(\n${cp}visible: ${pred.dart},\n${cp}child: ${rendered.trim()},\n${pad})`;
+      }
+    }
+    return rendered;
+  }
+
+  private renderNode(node: WidgetNode, state: AppState, indent: number): string {
     const pad = ' '.repeat(indent);
 
     switch (node.type) {
@@ -627,12 +668,16 @@ export class CodeGenerator {
       let out = '';
       let last = 0;
       let m: RegExpExecArray | null;
+      const lookup = (n: string) => this.currentScreenVars.find(v => v.name === n)?.type;
       while ((m = re.exec(content)) !== null) {
         out += this.esc(content.slice(last, m.index));
         const trimmed = m[1].trim();
         if (trimmed === 'item') out += `\${item}`;
         else if (trimmed.startsWith('item.')) out += `\${item['${trimmed.slice(5)}']}`;
-        else out += `\${_${trimmed}}`;
+        else {
+          const computed = resolveComputed(trimmed, lookup);
+          out += computed ? `\${${computed.dart}}` : `\${_${trimmed}}`;
+        }
         last = m.index + m[0].length;
       }
       out += this.esc(content.slice(last));
@@ -1074,6 +1119,12 @@ export class CodeGenerator {
         return this.setValueClosure(action);
       case 'clearField':
         return this.clearFieldClosure(action);
+      case 'showSnackBar':
+        return `() => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${this.esc(String(action.message ?? ''))}')))`;
+      case 'showDialog': {
+        const titlePart = action.title ? `title: Text('${this.esc(String(action.title))}'), ` : '';
+        return `() => showDialog(context: context, builder: (ctx) => AlertDialog(${titlePart}content: Text('${this.esc(String(action.message ?? ''))}'), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))]))`;
+      }
       default:
         return '() {}';
     }

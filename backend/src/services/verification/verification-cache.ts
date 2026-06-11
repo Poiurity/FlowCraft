@@ -38,8 +38,16 @@ export function stableStringify(v: unknown): string {
 // resolver; validator adds C16 for unresolvable targets.
 // 1.5.0 — Phase 1f: navigation.type 'tabs' is now generated (DefaultTabController
 // + TabBar + TabBarView) and C9-validated, closing the silent stack-degrade.
-export const CODEGEN_VERSION = process.env.CODEGEN_VERSION ?? '1.5.0';
-export const STATIC_VALIDATOR_VERSION = '1.5.0';
+// 1.6.0 — Phase 2a: seeded stringList/itemList (initialValue honored, type-coerced);
+// validator adds C17 (seed value vs declared field type).
+// 1.7.0 — Phase 2b: appBar/fab actions collected (collectScreenActions) so appBar
+// mutations get handlers + flow through checkAction (index-required → C4, not C3b).
+// 1.8.0 — Phase 2c: computed bindings (.length/.isEmpty/.isNotEmpty) + visibleWhen
+// (Visibility wrap) via a shared closed grammar; member access escalated to C1; C18.
+// 1.9.0 — Phase 2d: showSnackBar / showDialog actions (self-contained inline
+// closures → ScaffoldMessenger / AlertDialog).
+export const CODEGEN_VERSION = process.env.CODEGEN_VERSION ?? '1.9.0';
+export const STATIC_VALIDATOR_VERSION = '1.9.0';
 
 export function buildCacheKey(
   appState: unknown,

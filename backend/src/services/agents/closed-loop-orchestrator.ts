@@ -22,7 +22,7 @@ import { CompositeVerifier } from '../verification/composite-verifier.js';
 import { VerificationCache } from '../verification/verification-cache.js';
 import { loadRemoteConfig } from '../verification/remote-config.js';
 import { widgetRegistry } from '../widget-registry/registry-manager.js';
-import { collectActions } from '../codegen-shared/action-naming.js';
+import { collectScreenActions } from '../codegen-shared/action-naming.js';
 import type {
   RegistrySnapshot, LoopResult, AttemptRecord, ValidationError, AnalyzeResult,
   CriticVerdict,
@@ -996,11 +996,12 @@ function handleGenerationThrow(
 }
 
 function makeFactSheet(appState: AppState): string {
-  const screen = appState.screens[0];
-  if (!screen) return 'No screens generated.';
+  if (!appState.screens?.length) return 'No screens generated.';
 
-  const vars = screen.screenState?.variables ?? [];
-  const actions = collectActions(screen.body);
+  // Aggregate state and actions across ALL screens (not just screens[0]) so the
+  // critic doesn't see features on detail/settings screens as "missing".
+  const vars = appState.screens.flatMap(s => s.screenState?.variables ?? []);
+  const actions = appState.screens.flatMap(s => collectScreenActions(s));
   const actionTypes = [...new Set(actions.map((a: any) => a.type))];
 
   const widgetTypes = new Set<string>();
