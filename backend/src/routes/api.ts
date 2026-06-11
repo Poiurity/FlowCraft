@@ -166,7 +166,7 @@ router.post('/generate/stream', async (req: Request, res: Response) => {
     recordLoopResult(result);
 
     const changeReport = diffAppState(currentState, result.appState);
-    const changelog = explainChanges(changeReport, result.appState.appName);
+    const changelog = explainChanges(changeReport, result.appState.appName, resolveLang(lang));
 
     if (result.outcome !== 'degrade-prior') {
       stateManager.setState(sessionId, result.appState);
